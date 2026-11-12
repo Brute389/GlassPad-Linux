@@ -40,6 +40,49 @@ def extract(image, dest):
     return (os.path.isdir(root), root, p)
 
 
+def _shipped_source_digest():
+    """Digest of every module the payloads are supposed to carry.
+
+    Hashing one file (it used to be __main__.py) let a stale payload pass while
+    bundle.py inside it was a revision behind -- the label in --status came from the
+    image, and the check said fresh. Digest the set that ships, and the check means
+    what the name says.
+    """
+    import hashlib
+    sys.path.insert(0, ROOT)
+    from glasspad.bundle import QT_BACKEND_MODULES
+
+    h = hashlib.md5()
+    src = os.path.join(ROOT, "glasspad")
+    for name in sorted(os.listdir(src)):
+        if not name.endswith(".py") or name in QT_BACKEND_MODULES:
+            continue
+        h.update(name.encode())
+        with open(os.path.join(src, name), "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()
+
+
+def _payload_digest(pkg_dir):
+    import hashlib
+
+    h = hashlib.md5()
+    for name in sorted(os.listdir(pkg_dir)):
+        if not name.endswith(".py"):
+            continue
+        h.update(name.encode())
+        with open(os.path.join(pkg_dir, name), "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()
+
+
+def _stale(root):
+    pkg = os.path.join(root, "usr/share/glasspad/glasspad")
+    if not os.path.isdir(pkg):
+        return True
+    return _payload_digest(pkg) != _shipped_source_digest()
+
+
 def md5(path):
     with open(path, "rb") as fh:
         return hashlib.md5(fh.read()).hexdigest()
@@ -92,9 +135,10 @@ def test_extracted_contents_match_the_source_tree():
 
         packed = os.path.join(root, "usr/share/glasspad/glasspad/__main__.py")
         src = os.path.join(ROOT, "glasspad", "__main__.py")
-        fresh = os.path.isfile(packed) and md5(packed) == md5(src)
         check("the packed package IS the current source (not a stale AppDir)"
-              + ("" if fresh else "  -> rebuild: ./tools/make_appimage.sh"), fresh)
+              + ("" if not _stale(root) else
+                 "  -> rebuild: ./tools/make_appimage.sh"),
+              not _stale(root))
 
         v = shutil.which("desktop-file-validate")
         if v:

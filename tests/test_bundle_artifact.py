@@ -28,6 +28,42 @@ def check(label, cond):
         FAILS.append(label)
 
 
+def _shipped_source_digest():
+    """Digest of every module the payloads are supposed to carry.
+
+    Hashing one file (it used to be __main__.py) let a stale payload pass while
+    bundle.py inside it was a revision behind -- the label in --status came from the
+    image, and the check said fresh. Digest the set that ships, and the check means
+    what the name says.
+    """
+    import hashlib
+    sys.path.insert(0, ROOT)
+    from glasspad.bundle import QT_BACKEND_MODULES
+
+    h = hashlib.md5()
+    src = os.path.join(ROOT, "glasspad")
+    for name in sorted(os.listdir(src)):
+        if not name.endswith(".py") or name in QT_BACKEND_MODULES:
+            continue
+        h.update(name.encode())
+        with open(os.path.join(src, name), "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()
+
+
+def _payload_digest(pkg_dir):
+    import hashlib
+
+    h = hashlib.md5()
+    for name in sorted(os.listdir(pkg_dir)):
+        if not name.endswith(".py"):
+            continue
+        h.update(name.encode())
+        with open(os.path.join(pkg_dir, name), "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()
+
+
 def artifacts():
     return sorted(glob.glob(os.path.join(ROOT, "dist", "glasspad-*.run")))
 
@@ -69,6 +105,31 @@ def test_artefact_reports_the_layer_backend():
           "advertises zwlr_layer_shell_v1" in out)
     check("and it did the preload that makes that answer truthful",
           "preload         : ok" in out)
+
+
+def test_the_payload_is_the_current_source():
+    """A .run built from an older tree is a bug that only bites after you ship it.
+
+    The version string is no use here: two builds of the same version differ in code and
+    agree in version, which is exactly how a stale payload survives a release.
+    """
+    runs = artifacts()
+    if not runs:
+        print("  skip nothing built yet")
+        return
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(["unzip", "-q", "-o", runs[-1], "-d", tmp], capture_output=True)
+        pkg = os.path.join(tmp, "app", "glasspad")
+        if not os.path.isdir(pkg):
+            check("payload layout is app/glasspad", False)
+            return
+        ok = _payload_digest(pkg) == _shipped_source_digest()
+        check("every shipped module matches the source tree"
+              + ("" if ok else "  -> rebuild: python3 tools/make_bundle.py"), ok)
+        qt = [n for n in os.listdir(pkg) if n.endswith(".py")
+              and n in ("window.py", "widgets.py", "passthrough.py", "layout.py")]
+        check(f"and the Qt backend is not in the payload ({qt})", not qt)
 
 
 def test_the_qt_backend_explains_itself_instead_of_tracebacking():
