@@ -146,7 +146,7 @@ def test_uinput_report():
 def test_describe_mentions_both_halves():
     line = bundle.describe()
     check(f"one line for --status: {line}",
-          line.startswith("layer-shell:") and "(" in line and ")" in line)
+          line.startswith("layer-shell") and "(" in line and ")" in line)
 
 
 if __name__ == "__main__":

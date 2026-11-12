@@ -2099,135 +2099,6 @@ class Overlay:
                 return False
             GLib.timeout_add(600, report)
 
-        tm = os.environ.get("GLASSPAD_TOASTDEMO")
-        if tm:
-            # For photographing the toast. It is gone in 1.8 s, which is the right
-            # behaviour in a game and a nuisance for a screenshot -- a single shot at
-            # it was timed against nothing and missed every time, which is how "0 new
-            # pixels" gets mistaken for "the toast does not draw". Repeat it, and log
-            # where it landed so the capture can be checked against the intent.
-            def again():
-                self._say(tm)
-                bbox = self._hub_bbox(self.menu_open)
-                print(f"  toastdemo: hub at {bbox}, toast surface "
-                      f"{self.hud.get_width() if self.hud else 0}x"
-                      f"{self.hud.get_height() if self.hud else 0} "
-                      f"visible={self.hud.get_visible() if self.hud else False}",
-                      flush=True)
-                return True
-
-            GLib.timeout_add(900, again)
-
-        tc = os.environ.get("GLASSPAD_TOASTCYCLE")
-        if tc:
-            # A/B inside one run: the toast on, then off, forever. Comparing two
-            # separate launches measures the wallpaper slideshow as readily as the
-            # toast -- a 178k-pixel diff that way is mostly compositor, and it is the
-            # reason "is the text actually drawn" kept coming back ambiguous.
-            state = {"on": True}
-
-            def toggle():
-                if state["on"]:
-                    self._toast(tc, ms=10_000)
-                else:
-                    if self.hud is not None:
-                        self.hud.set_visible(False)
-                print(f"  toastcycle: {state['on']} hud="
-                      f"{self.hud.get_width() if self.hud else 0}x"
-                      f"{self.hud.get_height() if self.hud else 0} "
-                      f"visible={self.hud.get_visible() if self.hud else False}",
-                      flush=True)
-                state["on"] = not state["on"]
-                return True
-
-            period = int(os.environ.get("GLASSPAD_TOASTCYCLE_MS", "1200"))
-            GLib.timeout_add(period, toggle)
-
-        td = os.environ.get("GLASSPAD_TURBODEMO")
-        if td:
-            def fire():
-                # GLASSPAD_TURBODEMO=1 is the natural thing to type and "1" is not a
-                # control name; taking it as "arm A" beats a KeyError inside a timer,
-                # which prints and then silently does nothing for the rest of the run.
-                name = "A" if td.strip().lower() in ("1", "true", "yes", "") else td
-                self.turbo.armed.add(name)
-                _x, _y, w, h = self.geo[name]
-                self._press(name, _KIND_BY_NAME.get(name, BUTTON),
-                            w / 2.0, h / 2.0, w, h)
-                return False
-            GLib.timeout_add(900, fire)
-
-        if os.environ.get("GLASSPAD_EDITDEMO"):
-            # open edit mode from inside the running session, not with --edit at
-            # startup: the knob has to appear on the toggle itself
-            GLib.timeout_add(900, lambda: (self._set_edit(True), False)[1])
-
-        if os.environ.get("GLASSPAD_RESETDEMO"):
-            # grow A, then press Reset for real, so the restored state can be
-            # photographed rather than trusted
-            def grow_then_reset():
-                _x, _y, w, h = self.geo["A"]
-                self._edit_begin("A", w - 1.0, h - 1.0)
-                self._edit_update("A", 70.0, 70.0)
-                self._edit_end("A")
-                GLib.timeout_add(700, lambda: (self._reset_geometry(), False)[1])
-                return False
-            GLib.timeout_add(900, grow_then_reset)
-
-        rd = os.environ.get("GLASSPAD_RESIZEDEMO")
-        if rd:
-            # "A:60:60" grabs A's corner and drags it by 60,60 and lets go nothing:
-            # the readout stays up so the resized state can be photographed
-            def do_resize():
-                name, _, delta = rd.partition(":")
-                parts = (delta.split(":") + ["0", "0"])[:2]
-                dx, dy = float(parts[0]), float(parts[1])
-                self._set_edit(True)
-                if name in self.geo:
-                    _x, _y, w, h = self.geo[name]
-                    self._edit_begin(name, w - 2.0, h - 2.0)
-                    self._edit_update(name, dx, dy)
-                return False
-            GLib.timeout_add(900, do_resize)
-
-        demo = os.environ.get("GLASSPAD_PRESSDEMO")
-        if demo:
-            # hold a control down forever, so the pressed state can be screenshotted
-            # and measured; "all" does every button and trigger at once
-            def press_demo():
-                names = (list(self.ctrl_input) if demo == "all" else [demo])
-                for n in names:
-                    if n in self.ctrl_input:
-                        self._vis(n, "press", 1.0)
-                return False
-            GLib.timeout_add(900, press_demo)
-
-        which = os.environ.get("GLASSPAD_SHOWPANELS")
-        if which:
-            # 1 = edit panel only, 2 = about box only, 3 = save dialog only,
-            # anything else = all three (they overlap, which is fine on screen but
-            # makes them impossible to measure one at a time)
-            def show_all():
-                self._toggle_menu()
-                if which in ("1",):
-                    # goes through _set_edit, not set_visible: a panel mapped without
-                    # a placement lands at margin (0,0) in the top-left corner, and
-                    # then measures as nothing but theme grey wherever you look
-                    self._set_edit(True)
-                elif which in ("2",):
-                    self._show_panel(self.info)
-                elif which in ("3",):
-                    self._show_panel(self.confirm)
-                else:
-                    self.panel.set_visible(True)
-                    self._show_panel(self.info)
-                    self._show_panel(self.confirm)
-                return False
-            GLib.timeout_add(1200, show_all)
-
-        if os.environ.get("GLASSPAD_AUTOHUB"):
-            GLib.timeout_add(1200, lambda: (self._toggle_menu(), False)[1])
-
     # -- self test ----------------------------------------------------------
     def _selftest(self) -> None:
         """Drive every hub action in sequence and report, then quit.
@@ -2769,7 +2640,7 @@ class Overlay:
             # The marker has to be printed here. It used to sit on a timer after the
             # chain, which could never run: this step quits the loop, so the timer died
             # with it and an outside watcher had no way to tell "all passed" from
-            # "stopped early" -- check_all.py correctly called that unfinished.
+            # "stopped early" -- tools/check_all.py correctly called that unfinished.
             print("  selftest done", flush=True)
             return False
 

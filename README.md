@@ -18,17 +18,29 @@ here unchanged.
 
 ## Requirements
 
-* Python 3 and PyQt6. Developed on CPython 3.12 / PyQt6 6.11; the suite has also
-  been run green against PyQt6 and Qt **6.12.0**, and both files compile clean
-  on 3.13. Nothing uses a runtime-evaluated PEP 604/585 annotation (every module
-  defers them via `from __future__ import annotations`), so an older 3.x will
+* **Python 3 with GObject introspection, GTK 4, and `libgtk4-layer-shell`.** These are
+  the ones the shipped overlay cannot start without — the last is the library that puts a
+  surface above a fullscreen game, and `--status` prints where it found it or names the
+  package to install:
+
+  | | Arch / CachyOS | Debian / Ubuntu | Fedora |
+  | --- | --- | --- | --- |
+  | bindings | `python-gobject` | `python3-gi` | `python3-gobject` |
+  | GTK 4 | `gtk4` | `gir1.2-gtk-4.0` | `gtk4` |
+  | layer shell | `libgtk4-layer-shell` | `libgtk4-layer-shell0` | `libgtk4-layer-shell` |
+
+* **A compositor offering `zwlr_layer_shell_v1`** — KWin, Hyprland, Sway, wlroots. Stock
+  GNOME is the common one that does not.
+* Developed on CPython 3.12–3.14. Nothing uses a runtime-evaluated PEP 604/585 annotation
+  (every module defers them via `from __future__ import annotations`), so an older 3.x will
   very likely work, but it has not been checked.
 * Avoid `return` inside a `finally` block. It is a `SyntaxWarning` on newer
   CPython and is slated to become a `SyntaxError`, and it also silently swallows
   any in-flight exception — teardown belongs after the `try`/`except` chain so
   the handlers set a return code.
-* Linux with the `uinput` module (the installer enables it)
-* Optional: `python-evdev` for reading the pad back, `Xvfb` for the xcb test leg
+* Linux with the `uinput` module, writable to your user (the installer enables both)
+* Optional: `PyQt6` — only for `--backend qt`, which is not in the bundles and needs a
+  checkout. Optional: `python-evdev` for reading the pad back.
 
 ## Install
 
@@ -144,45 +156,61 @@ is not a diagnostic.
 
 ## Check your tree
 
-`tools/verify.sh` is self-contained: no root, no edits, no paths to configure.
-From the project root:
+Three commands, in order of how much they cost:
 
 ```bash
-sh tools/verify.sh            # full battery
-sh tools/verify.sh --fast     # state + tooling, skip the suite
-sh tools/verify.sh /some/tree # check a different checkout
+python3 -m glasspad --status      # this machine: library, compositor, /dev/uinput, profiles
+./install.sh --check              # uinput module, group, udev rule, desktop entry
+python3 tools/check_all.py        # the whole suite: 20 suites, ~28 s
 ```
 
-It starts its own `Xvfb` on `:99` rather than using your desktop — the suite
-maps a full-screen transparent overlay and would steal your input. Set
-`USE_MY_DISPLAY=1` to force your real compositor instead.
+`install.sh --check` changes nothing; it is the "why is there no overlay on screen"
+command, and it now reports the layer backend's dependencies rather than PyQt6, which was
+the one thing the shipped overlay does not need.
 
-Fixes are judged by **content**, never by hash. File hashes only say *which*
-revision a file is, so that an older-but-correct checkout is reported as older
-rather than broken. The input-ABI check imports the module rather than grepping
-it, because this port's bug class was constants whose names were right while
-their numbers were off by one — a grep for `ABS_HAT0X` matches whether it is
-`0x10` (a hat) or `0x39` (`ABS_MT_TRACKING_ID`).
+The input ABI is checked by **importing** the module, never by grepping it, because this
+port's bug class was constants whose names were right while their numbers were off by one —
+a grep for `ABS_HAT0X` matches whether it is `0x10` (a hat) or `0x39`
+(`ABS_MT_TRACKING_ID`). `TestXbox360Abi` in `tests/test_glasspad.py` asserts the numbers
+against the kernel headers.
 
 ## Tests
 
 ```bash
-QT_QPA_PLATFORM=offscreen python3 -m pytest tests -q
-python3 tools/run_tests.py            # same suite, no pytest installed
+python3 tools/check_all.py                        # everything, ~28 s
+python3 tools/run_tests.py                        # the pytest-style suite on its own
+python3 tools/check_all.py --no-legacy --no-live  # quick loop while editing
 ```
 
-Both report the same tallies. Current revision: **265 passed**
-offscreen, **261 passed + 4 skipped** under xcb.
+There are two runners and they are **not** duplicates. The stdlib suites each run on their
+own; `tests/test_glasspad.py` is written in pytest style, and `tools/run_tests.py` executes
+it through its own small pytest stand-in (session and function fixtures with yield
+teardown, `parametrize`, `tmp_path`, `monkeypatch`, `approx`, `skip`). pytest is not
+installed here and cannot be fetched, and a safety net that needs a package you lack is not
+a safety net. This is also why `check_all.py` routes that one file to the other runner
+instead of executing it: run directly it can only print *No module named pytest*, which is
+how 257 tests sit quietly inside a green-looking tree.
+
+Current tallies here:
+
+| piece | tally |
+| --- | --- |
+| stdlib suites | **204 passed** |
+| pytest-style suite, via `tools/run_tests.py` | **257 passed, 6 skipped** |
+| in-app self-test (`GLASSPAD_SELFTEST`: real hub, resize, rotation, profiles, turbo) | **85 checks** |
+
+Exit codes are three-state, because "everything passed" and "everything that *ran* passed"
+are different claims: `0` all green, `1` something failed, `2` something could not start at
+all. `--strict` folds the last case into a failure; the packaging gate treats `1` as fatal
+and prints `2` as a warning rather than pretending the tree is fully covered.
 
 Tallies legitimately differ by environment, which is not a failure:
 
 | Situation | Tally |
 | --- | --- |
-| offscreen, an X server on `:99` (what `verify.sh` starts) | `265 passed` |
-| offscreen, no X server anywhere | `259 passed, 6 skipped` |
-| offscreen, a Wayland session (Xwayland `:0`, no `:99`) | `259 passed, 6 skipped` |
-| xcb on `:99` | `261 passed, 4 skipped` |
-| xcb on another display (`USE_MY_DISPLAY=1`) | `259 passed, 6 skipped` |
+| offscreen, an X server on `:99` | `263 passed` |
+| offscreen, no X server anywhere | `257 passed, 6 skipped` |
+| offscreen, a Wayland session (Xwayland `:0`, no `:99`) | `257 passed, 6 skipped` |
 
 A Wayland-only desktop hits rows 3 and 5 without installing anything, and that
 is not a failure to fix: six tests call `open_display(":99")` by name, four of
@@ -196,11 +224,9 @@ The 6 are not gated by `QT_QPA_PLATFORM`: they call libX11 `open_display()`
 directly and skip themselves when no server answers. The 4 under xcb are
 offscreen-only tests that skip the other way round.
 
-`tools/run_tests.py` exists because this ships to desktops where PyQt6 is a
-system package and pytest often is not; a safety net needing a package you lack
-is not a safety net. It reimplements the slice of pytest the suite uses
-(session/function fixtures with yield teardown, `parametrize`, `approx`,
-`skip`).
+`tools/run_tests.py` also drives the two uinput-safety legs: it runs with opening a real
+pad made impossible and counts how many times the code tried, which is the only way to see
+a test that passes *because* the backend swallowed an error.
 
 ### Layer-backend suites
 
@@ -276,19 +302,18 @@ selects nothing and prints `0 passed, 0 failed, 0 skipped` — which looks like 
 clean run of a filtered set rather than no tests at all. Pass one substring, or
 run the whole suite.
 
-**Editing `tests/test_glasspad.py` invalidates two pins in `tools/verify.sh`.**
-Section 2 identifies the tree by that file's md5. After any edit — even a
-docstring one, which changes no behaviour — add the new hash to
-`HASHES_tests_test_glasspad_py` *and* update `WANT_OFF_P` / `WANT_XCB_P` in the
-same change. Miss it and `verify.sh` prints `unrecognised revision` and quietly
-drops to asserting *zero failures only*, so a regression that adds skips still
-passes. This bit twice while writing the 259-test revision.
+**Nothing in the test path is hash-pinned.** The retired `tools/verify.sh` identified the
+tree by the md5 of `tests/test_glasspad.py` and, when a docstring edit broke the pin,
+quietly dropped to asserting "zero failures only" — a regression that added skips still
+passed. A guard whose failure mode is a weaker check is worse than no guard, so the current
+runners pin nothing: they report what actually ran, and the tallies above are documentation
+rather than an assertion.
 
-`install.sh` and `tools/uinput_watch.py` are hash-pinned too, but only
-`tests/test_glasspad.py` decides the suite tallies, so only editing the test file
-can weaken a run. `tools/verify.sh` pins nothing about itself: a run reports the
-tree's hashes and nothing about the checker's own revision, so a change to the
-checker is verified by running it, not by a pin.
+What replaced it is a **content** check that does survive edits:
+`TestDocPointers::test_no_dangling_file_references` resolves every filename the shipped
+files mention in prose — comments and docstrings, not code — against the tree. It is what
+caught this session's `NOTES.md`-style references, and it still has teeth: planting
+"see NOTES.md and thing.py" in a comment fails the suite.
 
 ### A third way: a screen pixel diff measures the compositor
 
@@ -302,12 +327,14 @@ What works instead:
 
 1. **Measure inside the box you changed**, not the screen. The toast is 38×23 logical
    for one word; the ring around a 75 px button is ~1.4k pixels.
-2. **Toggle inside one run**, and report the noise floor beside the signal. The
-   `GLASSPAD_TOASTCYCLE` hook exists for this: it shows the toast, hides it, forever, and
-   logs which state it is in so the capture can be lined up with it. Same-state frames
-   differ by 0 px in that box; toggling the toast changes 332 px of it and adds 196 px of
-   bright ink. That is the toast, and the zero next to it is why the number means
-   something.
+2. **Toggle inside one run**, and report the noise floor beside the signal. Comparing two
+   separate launches measures the wallpaper slideshow as readily as the thing you changed —
+   a 178k-pixel whole-screen diff is mostly compositor. The measurement hooks this was done
+   with (`GLASSPAD_TOASTCYCLE` and friends) were removed once the questions they answered
+   were answered; the method outlives them, and the code is in git history if you need to
+   re-measure. What the method produced stands: same-state frames differ by **0 px** inside
+   the toast's box, toggling the toast changes **332 px** of it. The zero beside the number
+   is what makes the number mean something.
 3. **Capture with `spectacle -b -n -o file.png`.** There is no `grim` on this machine and
    there never was — no package owns `/usr/bin/grim`, and `/usr/bin`'s mtime predates the
    session — so a script that shells out to it fails with `2>/dev/null` and leaves you
@@ -319,9 +346,7 @@ What works instead:
 | --- | --- |
 | `tools/probe_real_pad.py` | Creates the **real** pad and reads identity, `PRODUCT` and every axis range back out of the kernel, then destroys it and verifies nothing was left. Needs a writable `/dev/uinput`. |
 | `tools/uinput_watch.py` | Snapshots kernel input devices and reports any pad a test leaked. `run -- <cmd>` wraps the suite so nothing hides between steps. |
-| `tools/probe_uinput.py` | Runs the suite with opening a real pad made impossible and counts attempts. Matters on a machine where `/dev/uinput` *is* writable. |
-| `tools/verify_x11.py` | End-to-end xcb: is the input region right? Maps full-screen, so aim it at a server you own (`Xvfb :99`). |
-| `tools/verify_wayland.py` | Same for the Wayland plugin. Cannot use Xvfb — needs a real compositor. |
+| `tools/run_tests.py` | Runs the pytest-style suite with no pytest installed, including the uinput-safety legs. `check_all.py` calls it; you rarely need to. |
 | `tools/run_tests.py` | The suite with no pytest. |
 | `tools/check_all.py` | Every suite plus the live self-test; exit status is real, and a suite that cannot start counts as failing. |
 | `tools/render_stick_curve.py` | The stick response as **millimetres of thumb travel**, per preset. |
@@ -333,7 +358,8 @@ What works instead:
 
 A green test suite does **not** prove no pad was created: `PadService` turns
 backend errors into a status line, so a test that reaches the backend passes
-either way. That is why `uinput_watch` and `probe_uinput` exist.
+either way. That is why `uinput_watch` exists, and why `tools/run_tests.py` runs the suite
+again with pad creation made impossible and counts the attempts.
 
 ## Using the overlay
 
@@ -690,29 +716,23 @@ Because the toggle now latches, this is no longer a momentary curiosity on
 Wayland: the overlay keeps swallowing input for as long as it is hidden, so
 press `⊘` again to restore both the controls and pass-through.
 
-### The native Wayland path needs a compositor to verify
+### The Qt backend's shaping paths are no longer covered by anything
 
-`tools/verify_wayland.py` checks the `setMask` input-region path, but it cannot
-run against Xvfb — the whole point is to exercise the wayland plugin, which needs
-a real compositor. It is therefore the one part of the port no automated run
-covers. It has been run by hand once on a real compositor and the client half
-passed completely; that is evidence, not a regression guard:
+Both tools that exercised them (`verify_x11.py` for XShape, `verify_wayland.py` for
+`QWindow.setMask` → `wl_surface.set_input_region`) were retired in the cleanup pass: they
+tested the Qt backend, which is no longer in the shipped bundles, and neither had been run
+as part of anything automated for a long time. Their history is in git.
 
-| Shaping path | Selected when | Covered by |
-| --- | --- | --- |
-| XShape via libX11 | an X server is reachable, so `QT_QPA_PLATFORM=xcb` | `tools/verify_x11.py`, run by `verify.sh` |
-| `QWindow.setMask` → `wl_surface.set_input_region` | no X server, native wayland plugin | nothing automated — run it by hand |
+What is verified now is the path that ships, and it is verified by measurement rather than
+by a tool: `set_input_region` on a KWin layer surface was measured to be **inert**, which is
+why the layer backend does shape gating in the painters instead (`inside_shape`,
+`tests/test_layer_geom.py`), and why the honest statement in the README is "the compositor
+will not do this for us" rather than a coverage claim.
 
-A KDE Wayland session normally has Xwayland running, so `DISPLAY` is set and
-`_force_xcb()` chooses **xcb**, which *is* covered. The uncovered case is a
-session with Xwayland switched off. Run it once on the target machine:
-
-```bash
-QT_QPA_PLATFORM=wayland python3 tools/verify_wayland.py
-```
-
-It maps the overlay full-screen briefly, so it is a hand-run check rather than
-something `verify.sh` would do unprompted to someone's desktop.
+If you revive the Qt backend on a machine where it matters, the uncovered case is a session
+with Xwayland switched off: on ordinary KDE `DISPLAY` exists, so `_force_xcb()` picks xcb and
+XShape, and that behaviour is at least exercised by the dormant suite's session-detection
+tests.
 
 ### What binds this device — and it is not `xpad`
 

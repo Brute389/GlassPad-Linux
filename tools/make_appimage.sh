@@ -50,7 +50,10 @@ arch=$(uname -m)
 if [ "$run_tests" = 1 ]; then
   echo "==> suite"
   set +e
-  python3 tools/check_all.py >/tmp/mkai_tests.log 2>&1
+  # --no-artifacts: the dist/ suites compare the existing image against the current
+  # source, so they are red by definition until this script rebuilds it. Including them
+  # here would mean the only way to pass the gate is to have already packaged.
+  python3 tools/check_all.py --no-artifacts --no-live >/tmp/mkai_tests.log 2>&1
   rc=$?
   # Ship the test record with the payload. Read from this run only, so --skip-tests
   # cannot inherit a stale log from a previous build and look better tested than it is.
@@ -82,6 +85,21 @@ mkdir -p "$appdir/usr/bin" "$appdir/usr/lib" \
 # The package. --exclude keeps __pycache__ out: a stale .pyc from a different Python is
 # the worst kind of packaging bug, because it only breaks on the other person's machine.
 cp -r glasspad "$appdir/usr/share/glasspad/glasspad"
+# The Qt backend is not shipped: 136 KiB of a second toolkit the overlay does not use, and
+# the AppRun sets up a GTK process. --backend qt still works from a checkout.
+python3 - "$appdir/usr/share/glasspad/glasspad" <<'PYQ'
+import os, sys
+sys.path.insert(0, ".")
+from glasspad.bundle import QT_BACKEND_MODULES
+root = sys.argv[1]
+gone = 0
+for name in QT_BACKEND_MODULES:
+    p = os.path.join(root, name)
+    if os.path.isfile(p):
+        os.remove(p)
+        gone += 1
+print(f"    Qt backend excluded from the payload ({gone} modules)")
+PYQ
 find "$appdir/usr/share/glasspad" -name '__pycache__' -type d -prune -exec rm -rf {} +
 cp tools/glasspad-profile "$appdir/usr/bin/glasspad-profile"
 cp README.md "$appdir/usr/share/doc/glasspad/README.md"

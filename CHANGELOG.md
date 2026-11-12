@@ -4,6 +4,39 @@ Version numbers here belong to the **Linux port**. The Windows original stays
 1.0.2 forever, and docstrings throughout the tree that say "ported from GlassPad
 1.0.2" name that source release — they are provenance, not this version, and do
 not move on a bump. `test_version_strings_agree()` pins the distinction.
+## Unreleased — orphan-code pass (layer backend is what ships)
+
+Deletions are recoverable: the tree is now a git repository, with the pre-cleanup
+state captured as the first commit.
+
+**Removed.** `tools/verify.sh` (689 lines), `tools/verify_wayland.py`,
+`tools/verify_x11.py`, `tools/probe_uinput.py` — Qt-era verification that tested a
+backend the bundles no longer contain, and the only thing pinning test counts so a
+stale pin silently weakened the check. `TestVerifyToolTeardown` went with them.
+128 lines of measurement scaffolding left `overlay_layer.py` (the
+`GLASSPAD_*DEMO`, `SHOWPANELS`, `AUTOHUB`, `TOASTCYCLE` hooks); `GLASSPAD_SELFTEST`,
+`TRACE` and `DEBUG` stay, because something has to drive the handlers.
+
+**Corrected, not deleted.** `tools/run_tests.py` looked like a duplicate runner and
+was nearly removed; it is the only thing that executes `tests/test_glasspad.py`, so
+**257 tests were running all along** and `check_all.py` simply never called it. They
+are wired together now: 20 suites, 204 stdlib tests + 257 pytest-style + 85 live
+checks, one command. `--no-legacy` reports that suite as skipped instead of
+resurrecting a run that can only fail.
+
+**Fixed.** `install.sh --check` reported **PyQt6** as the dependency and never
+mentioned `libgtk4-layer-shell` — the one library the shipped overlay cannot start
+without; it now walks the real chain (PyGObject, GTK 4, layer-shell, compositor) and
+labels PyQt6 optional. `tools/hit_test.py` hardcoded the Arch path for the layer-shell
+library and now uses the same finder the app does. The doc-pointer test read raw
+source, so `self.sh` parsed as a shell script and every runtime path literal looked
+dangling; it reads comments and docstrings only, which is what it claimed to do, and
+still catches a planted `NOTES.md`.
+
+**Packaging.** The Qt backend's eight modules are excluded from both artefacts —
+136 KiB, a third of the package bytes — listed once in `glasspad/bundle.py`.
+`--backend qt` inside a bundle now explains the two possible reasons instead of
+raising `ModuleNotFoundError`, and a test asserts it.
 
 ## 1.1.0 — 2026-11-06
 

@@ -455,8 +455,31 @@ def main(argv: list[str] | None = None) -> int:
 
     _force_xcb()
 
-    from PyQt6.QtCore import QSocketNotifier
-    from PyQt6.QtWidgets import QApplication
+    # Bundles ship only the layer backend (see glasspad/bundle.py). Two different reasons
+    # can land here and they need different answers: the code is not in this bundle at all,
+    # or PyQt6 is not installed on a machine that does have the code. One traceback about
+    # "No module named glasspad.window" would send a double-clicker chasing the wrong thing.
+    import importlib.util
+
+    if importlib.util.find_spec("glasspad.window") is None:
+        sys.stderr.write(
+            "glasspad: this build ships the layer backend only\n"
+            "  --backend qt needs a source checkout; those modules are deliberately not in\n"
+            "  the bundle (they are a second toolkit, and the layer overlay is the one that\n"
+            "  stays above a fullscreen game).\n"
+            "  Run without --backend, or `glasspad --status` for what this machine supports.\n")
+        return 4
+    try:
+        from PyQt6.QtCore import QSocketNotifier
+        from PyQt6.QtWidgets import QApplication
+    except ImportError as exc:
+        sys.stderr.write(
+            "glasspad: the Qt backend is not available here\n"
+            f"  import failed: {exc}\n"
+            "  packaged builds ship the layer backend only; the Qt one needs PyQt6 and a\n"
+            "  checkout. Run without --backend to get the overlay that survives fullscreen\n"
+            "  games, or `glasspad --status` to see what this machine supports.\n")
+        return 4
 
     # Qt derives WM_CLASS from argv[0], and WM_CLASS is the only handle a
     # compositor window rule has. The overlay does ask for

@@ -71,6 +71,30 @@ def test_artefact_reports_the_layer_backend():
           "preload         : ok" in out)
 
 
+def test_the_qt_backend_explains_itself_instead_of_tracebacking():
+    """--backend qt inside a bundle: a clean sentence, not a ModuleNotFoundError.
+
+    The Qt modules are excluded from the payload on purpose. What matters is that asking
+    for them says which of the two reasons applies, because "No module named
+    glasspad.window" reads like a broken install.
+    """
+    runs = artifacts()
+    if not runs:
+        print("  skip nothing built yet")
+        return
+    env = clean_env()
+    env["GLASSPAD_BUNDLE"] = "1"        # irrelevant to the message; keeps env honest
+    p = subprocess.run([runs[-1], "--backend", "qt"], cwd="/", env=env,
+                       capture_output=True, text=True, timeout=180)
+    out = (p.stdout or "") + (p.stderr or "")
+    check("it refuses rather than starting something half-built", p.returncode != 0)
+    check("and says the layer backend is what ships",
+          "layer backend" in out.lower())
+    check("no traceback", "Traceback" not in out)
+    check("does not blame PyQt6 for a packaging decision",
+          "PyQt6" not in out)
+
+
 def test_the_launcher_header_is_plain_posix_sh():
     """Parse the script half of the artefact, not the zip half.
 

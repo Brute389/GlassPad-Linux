@@ -92,8 +92,9 @@ def test_extracted_contents_match_the_source_tree():
 
         packed = os.path.join(root, "usr/share/glasspad/glasspad/__main__.py")
         src = os.path.join(ROOT, "glasspad", "__main__.py")
-        check("the packed package IS the current source (not a stale AppDir)",
-              os.path.isfile(packed) and md5(packed) == md5(src))
+        fresh = os.path.isfile(packed) and md5(packed) == md5(src)
+        check("the packed package IS the current source (not a stale AppDir)"
+              + ("" if fresh else "  -> rebuild: ./tools/make_appimage.sh"), fresh)
 
         v = shutil.which("desktop-file-validate")
         if v:

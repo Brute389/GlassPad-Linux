@@ -21,7 +21,7 @@ produce it.
 Limitation worth knowing: the device only appears in sysfs for as long as its
 file descriptor is open. The race this guards closed opens and closes the pad
 within microseconds, so a before/after diff can legitimately report clean while
-the device briefly existed. tools/probe_uinput.py counts those constructions
+the device briefly existed (the runner's uinput-leg check in tools/run_tests.py counts those constructions)
 instead; run both.
 """
 from __future__ import annotations

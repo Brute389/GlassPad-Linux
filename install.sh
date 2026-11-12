@@ -164,14 +164,32 @@ do_check() {
         say "  autostart   : not configured (install with --autostart)"
     fi
     say ""
-    say "python"
-    python3 -c "import PyQt6.QtCore as c; print('  PyQt6       :', c.PYQT_VERSION_STR)" 2>/dev/null \
-        || say "  PyQt6       : NOT installed (pacman -S python-pyqt6)"
-    say ""
-    say "display"
-    say "  DISPLAY          : ${DISPLAY:-<unset>}"
-    say "  WAYLAND_DISPLAY  : ${WAYLAND_DISPLAY:-<unset>}"
-    say "  QT_QPA_PLATFORM  : ${QT_QPA_PLATFORM:-<unset, GlassPad will force xcb>}"
+      say ""
+      say "backends"
+      # The layer backend is the default and the only one that stays above a fullscreen
+      # game, so its prerequisites are the ones worth failing on. Reporting PyQt6 as *the*
+      # dependency sent people to install a toolkit they would never use while saying
+      # nothing about the one library that decides whether the overlay appears at all.
+      python3 -c 'import gi' 2>/dev/null \
+          && say "  PyGObject   : present" \
+          || say "  PyGObject   : NOT installed (pacman -S python-gobject | apt install python3-gi)"
+      python3 -c 'import gi; gi.require_version("Gtk", "4.0")' 2>/dev/null \
+          && say "  GTK 4       : typelib present" \
+          || say "  GTK 4       : NOT installed (pacman -S gtk4 | apt install gir1.2-gtk-4.0)"
+      # Ask the app where the library is: it knows the search order, the bundle
+      # directories and the override variable, and copying that list here would go stale
+      # the first time the search grows.
+      python3 -c "import sys; sys.path.insert(0, '$SRC'); from glasspad.bundle import describe; print(' ', describe())" 2>/dev/null \
+          || say "  layer-shell : NOT FOUND (pacman -S libgtk4-layer-shell | apt install libgtk4-layer-shell0)"
+      python3 -c 'import gi; gi.require_version("Gtk4LayerShell", "1.0")' 2>/dev/null \
+          || say "  layer-shell : library present, but the Gtk4LayerShell typelib is missing"
+      python3 -c "import PyQt6.QtCore as c; print('  PyQt6       :', c.PYQT_VERSION_STR, '(optional: --backend qt only)')" 2>/dev/null \
+          || say "  PyQt6       : not installed (optional, --backend qt only)"
+      say ""
+      say "display"
+      say "  DISPLAY          : ${DISPLAY:-<unset>}"
+      say "  WAYLAND_DISPLAY  : ${WAYLAND_DISPLAY:-<unset -- the layer backend needs Wayland>}"
+      say "  QT_QPA_PLATFORM  : ${QT_QPA_PLATFORM:-<unset, only the Qt backend reads this>}"
 }
 
 # --- uinput -----------------------------------------------------------------

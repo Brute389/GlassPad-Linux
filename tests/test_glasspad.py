@@ -1309,52 +1309,6 @@ class TestSessionDetection:
 _REAL_X_SOCKET_DIR = "/tmp/.X11-unix"
 
 
-class TestVerifyToolTeardown:
-    """The verify tools must tear the overlay down the way the app does.
-
-    Both mapped a full-screen click-through overlay, printed their verdict and
-    called sys.exit() with the window still alive. closeEvent is what runs
-    pad.dispose() and router.shutdown(), so neither ran: the event filter stayed
-    installed on the QApplication, and a live X window was left for the
-    interpreter to unwind around -- the one place a teardown fault surfaces as a
-    core dump printed immediately under the tool's own "ALL PASS", which reads as
-    though a certified path had crashed.
-
-    The app cannot show this on the signal path, and was measured not to: on
-    SIGINT/SIGTERM app.quit() closes windows on the way out, and pad.dispose()
-    then router.shutdown() ran with exit 0 across three runs (xcb).
-
-    That result was over-extended in an earlier revision of this docstring to
-    claim the hub's Quit button was sound because it also calls close(). It is
-    not, and TestQuitOnClose owns that: close() did dispose the pad, but for a
-    Qt::Tool window it does not end the event loop, so the process survived with
-    no window. Teardown-logic correctness and loop-exit are two different
-    assertions -- proving one says nothing about the other.
-
-    Parsed as an AST rather than searched as text so a mention in prose cannot
-    satisfy it. What is being asserted is that the file attempts the teardown;
-    whether close() actually ran is visible in the tool's own transcript, which
-    now prints a teardown marker before its verdict.
-    """
-
-    ROOT = pathlib.Path(__file__).resolve().parent.parent
-
-    @pytest.mark.parametrize("tool_name",
-                             ["verify_x11.py", "verify_wayland.py"])
-    def test_tool_closes_its_window_before_exiting(self, tool_name):
-        tool = self.ROOT / "tools" / tool_name
-        assert tool.exists(), f"{tool} is gone; update me"
-        tree = ast.parse(tool.read_text())
-        closes = [node for node in ast.walk(tree)
-                  if isinstance(node, ast.Call)
-                  and isinstance(node.func, ast.Attribute)
-                  and node.func.attr == "close"
-                  and not node.args]
-        assert closes, (
-            f"{tool_name} exits with its window still mapped, so closeEvent "
-            "never runs: pad.dispose() and router.shutdown() are skipped and a "
-            "teardown fault would surface as a core dump under its own ALL PASS")
-
 
 class TestQuitOnClose:
     """The hub's Quit button must end the process, not just hide the overlay.
@@ -3374,13 +3328,49 @@ class TestDocPointers:
         missing = [str(p) for p in self.SHIPPED if not p.is_file()]
         assert not missing, f"test itself is stale: {missing}"
 
+    @staticmethod
+    def _prose(path):
+        """Comment and docstring text only.
+
+        Scanning raw source produced nothing but false positives: `self.sh` and `ov.sh`
+        look exactly like shell filenames to a regex, and every runtime path we build --
+        profiles/default.json, the selftest scratch file, the LICENSE-name search list --
+        is a string literal in code, not a pointer a human follows. The thing worth
+        checking is prose that sends a reader to a file, so that is all that is read.
+        """
+        text = path.read_text(encoding="utf-8")
+        if path.suffix == ".py":
+            import io
+            import tokenize
+
+            out = []
+            tree = ast.parse(text)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                     ast.AsyncFunctionDef)):
+                    doc = ast.get_docstring(node, clean=False)
+                    if doc:
+                        out.append(doc)
+            try:
+                for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+                    if tok.type == tokenize.COMMENT:
+                        out.append(tok.string)
+            except (tokenize.TokenError, IndentationError):
+                pass
+            return "\n".join(out)
+        # shell and desktop templates: '#' comment lines, and nothing else
+        return "\n".join(ln for ln in text.splitlines()
+                          if ln.strip().startswith("#"))
+
     def test_no_dangling_file_references(self):
         dangling = []
         for path in self.SHIPPED:
-            for name in sorted(set(self.NAMED.findall(
-                    path.read_text(encoding="utf-8")))):
+            for name in sorted(set(self.NAMED.findall(self._prose(path)))):
                 if name in self.RUNTIME:
                     continue
+                # A qualified mention ("tools/check_all.py") never reaches here: the
+                # lookbehind on NAMED refuses anything preceded by a slash, which is the
+                # right outcome -- a path that names its directory is already precise.
                 if not any((base / name).is_file() for base in self.LOOKUP):
                     dangling.append(f"{path.name} mentions {name}")
         assert not dangling, dangling

@@ -18,6 +18,18 @@ from __future__ import annotations
 import ctypes.util
 import os
 
+# The Qt backend's own modules. Nothing the layer backend imports appears here -- that is
+# the point, and it is asserted in the tests rather than assumed: 136 KiB, about a third of
+# the package bytes, used to ride along in both bundles.
+#
+# They are excluded from the payloads, not deleted: the Qt path still works from a checkout
+# and is the only route that does not need zwlr_layer_shell_v1 (GNOME without the extension,
+# a bare X session). Ask for it in a bundle and __main__ says so plainly.
+QT_BACKEND_MODULES = (
+    "window.py", "widgets.py", "layout.py", "zones.py", "touch_router.py",
+    "editor.py", "license_window.py", "passthrough.py",
+)
+
 ENV_OVERRIDE = "GLASSPAD_LAYER_SHELL"
 UINPUT_PATH = "/dev/uinput"
 
@@ -113,4 +125,5 @@ def uinput_ready(path: str = UINPUT_PATH) -> tuple[bool, str]:
 def describe() -> str:
     """One line for --status and for the startup banner."""
     p, why = layer_shell_path()
-    return f"layer-shell: {p or 'NOT FOUND'} ({why})"
+    # label padded to match the other --status lines; install.sh prints this verbatim
+    return f"layer-shell     : {p or 'NOT FOUND'} ({why})"

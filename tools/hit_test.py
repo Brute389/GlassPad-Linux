@@ -26,8 +26,15 @@ import ctypes
 import os
 import sys
 
-GTK4_LAYER_SHELL = "/usr/lib/libgtk4-layer-shell.so.0"
+# Found, not hardcoded: the old /usr/lib constant was an Arch path, and the same
+# search the app uses knows about Debian multiarch, Fedora and bundle directories.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from glasspad.bundle import layer_shell_path  # noqa: E402
+
+GTK4_LAYER_SHELL, _GLS_WHY = layer_shell_path()
 try:
+    if not GTK4_LAYER_SHELL:
+        sys.exit("libgtk4-layer-shell not found; set GLASSPAD_LAYER_SHELL=/path/to/it")
     ctypes.CDLL(GTK4_LAYER_SHELL, mode=ctypes.RTLD_GLOBAL)
 except OSError:
     pass                                    # fall back to whatever LD_PRELOAD gives us
