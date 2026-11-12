@@ -17,6 +17,9 @@ Special modes, both of which work with no Wayland session running:
                     writable. Without that access the controls draw, animate,
                     and reach no game whatsoever, which is the most confusing
                     failure this program can have.
+  --uninstall-uinput  remove the udev rule and modules-load file this program
+                    installed. Does NOT touch your layout, your desktop entry,
+                    or the input group -- those are yours to decide about.
   --install-desktop   add a menu entry pointing at this AppImage (or checkout),
                     plus the icon, in the user's own directories. No root.
                     --uninstall-desktop takes it away again.
@@ -217,6 +220,9 @@ def main(argv: list[str] | None = None) -> int:
         # unrecognised flag fall through would start a fullscreen transparent
         # overlay in answer to a setup request -- see --version below.
         return install_uinput(rest)
+    if "--uninstall-uinput" in rest:
+        # Narrower than install.sh --uninstall on purpose; see install_uinput().
+        return uninstall_uinput()
     if "--install-desktop" in rest:
         # Also before the session check: a menu entry has nothing to do with a
         # running compositor, and this is the command that makes a downloaded
@@ -250,6 +256,70 @@ def main(argv: list[str] | None = None) -> int:
     if code:
         sys.stderr.write(LAYER_INSTALL_NOTE)
     return code
+
+
+def uninstall_uinput(argv: list[str] = ()) -> int:
+    """Take back the udev rule and the modules-load file, and report what that did.
+
+    Narrow on purpose. `install.sh --uninstall` also clears both install prefixes,
+    the autostart entry and `~/.config/GlassPad/layout.json` -- and someone removing
+    a device rule from a bundle has not asked for their button positions to be
+    deleted with it.
+
+    The verdict is the part worth writing. On a machine with KDE Connect or Steam
+    installed, `/dev/uinput` is still writable after the rule is gone, because both
+    ship `TAG+="uaccess"` rules for it. Reporting "removed" there is a claim the
+    user can disprove simply by opening the overlay, so the answer is measured as
+    the account rather than as root, and a still-writable node is explained instead
+    of hidden.
+    """
+    import shutil
+    import subprocess
+
+    from . import bundle, pad
+
+    installer = bundle.find_installer()
+    if not installer:
+        print("This build ships no installer, so it cannot undo what one did.")
+        print("Looked for install.sh in:")
+        for root in bundle.installer_roots():
+            print(f"    {root}")
+        print("If you installed the rule by hand, remove it by hand:")
+        print("    sudo rm /etc/udev/rules.d/99-glasspad-uinput.rules")
+        print("    sudo rm /etc/modules-load.d/uinput.conf")
+        print("    sudo udevadm control --reload-rules && sudo udevadm trigger")
+        return 2
+
+    tool = next((t for t in ("pkexec", "sudo") if shutil.which(t)), None)
+    if tool is None:
+        print(f"Neither pkexec nor sudo is available. Run as root:")
+        print(f"    sh {installer} --uninstall-uinput")
+        return 2
+
+    cmd = [tool, "sh", installer, "--uninstall-uinput"]
+    dry = "--dry-run" in argv
+    if dry:
+        cmd = cmd[1:] + ["--dry-run"]
+        print("(--dry-run: the installer will report and change nothing)")
+
+    rc = subprocess.call(cmd)
+    if rc == 125:
+        print(f"\nAuthorisation declined ({tool} exit 125); nothing was changed.")
+        return 1
+    if rc != 0 or dry:
+        return rc
+
+    if pad.uinput_available():
+        print("\n/dev/uinput is still writable by your account. That is not the rule")
+        print("we just removed -- it is gone. A distro rule is most likely granting")
+        print("it (KDE Connect and Steam both do), which means GlassPad needs no")
+        print("rule of its own here and will keep working:")
+        print("    udevadm info /dev/uinput | grep uaccess")
+    else:
+        print("\n/dev/uinput is no longer writable for your account. GlassPad will say")
+        print("NO PAD and name the fix instead of drawing controls that go nowhere.")
+    print("Untouched: your layout, your desktop entry, the input group.")
+    return 0
 
 
 def install_uinput(argv: list[str] = ()) -> int:

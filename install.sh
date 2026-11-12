@@ -11,6 +11,10 @@
 #                               group membership. This is what a bundle runs
 #                               (`glasspad --install-uinput`), since it cannot
 #                               carry /etc/udev/rules.d inside itself.
+#   ./install.sh --uninstall-uinput
+#                               the udev rule and the modules-load file only.
+#                               Narrow on purpose: --uninstall also deletes the
+#                               saved layout, which a bundle user did not ask for.
 #   ./install.sh --uninstall    undo everything, from both install roots
 #
 # --uninstall is deliberately broader than the mode you installed with: it clears
@@ -113,6 +117,7 @@ for arg in "$@"; do
         --user)      USER_ONLY=1; PREFIX="$(target_home)/.local" ;;
         --autostart) AUTOSTART=1 ;;
         --uinput)    MODE=uinput ;;
+        --uninstall-uinput) MODE=uinput_remove ;;
         --uninstall) MODE=uninstall ;;
         -h|--help)   # Print the whole header block, however long it is. A fixed
                      # line range silently truncates --help by one option every
@@ -448,6 +453,61 @@ case "$MODE" in
         ;;
     uninstall)
         uninstall
+        ;;
+    uinput_remove)
+        # The undo for `glasspad --uninstall-uinput`. Deliberately narrower than
+        # --uninstall: that one clears both install prefixes, the autostart entry
+        # and ~/.config/GlassPad/layout.json, and a person removing a device rule
+        # from a bundle has not asked for their button positions to be deleted.
+        if [ "$DRY" != 1 ]; then
+            need_root
+        fi
+        say "removing the uinput grant set up for $TARGET_USER"
+        if [ "$DRY" = 1 ]; then
+            say "  would remove: $MODULES_CONF $UDEV_RULE"
+        else
+            for f in "$MODULES_CONF" "$UDEV_RULE"; do
+                if [ -f "$f" ]; then
+                    rm -f "$f" && say "  removed $f"
+                else
+                    say "  $f was not there"
+                fi
+            done
+            if command -v udevadm >/dev/null 2>&1; then
+                run udevadm control --reload-rules
+                run udevadm trigger
+            fi
+        fi
+        say ""
+        if [ "$DRY" = 1 ]; then
+            say "  dry run: nothing changed"
+        elif [ ! -e /dev/uinput ]; then
+            say "  /dev/uinput : gone. The module is still loaded; take it back"
+            say "  now with:   rmmod uinput   (or leave it: nothing can use it)"
+        else
+            perms=$(ls -l /dev/uinput | awk '{print $1" "$3":"$4}')
+            as_user=$(su -s /bin/sh "$TARGET_USER" -c 'test -w /dev/uinput && echo yes || echo no' 2>/dev/null || echo unknown)
+            say "  /dev/uinput : $perms"
+            if [ "$as_user" = yes ]; then
+                # Seen on real machines: removing GlassPad's rule changes nothing,
+                # because KDE Connect (40-kdeconnect-uinput.rules) and Steam
+                # (60-steam-input.rules) both hand the node to the active console
+                # user with TAG+="uaccess". Reporting "removed" there would be a
+                # lie the user can disprove by opening the overlay.
+                say "  still writable by $TARGET_USER, and that is NOT this rule --"
+                say "  it is gone. A distro rule is probably granting it:"
+                say "      udevadm info /dev/uinput | grep uaccess"
+                say "  or it is a group you were already in. GlassPad needs no rule"
+                say "  in that case; it was belt and braces."
+            else
+                say "  no longer writable by $TARGET_USER: GlassPad will report"
+                say "  NO PAD rather than draw controls that go nowhere."
+            fi
+        fi
+        say ""
+        say "  left alone: the uinput module, group membership"
+        say "  (gpasswd -d $TARGET_USER input if you want it gone), your layout,"
+        say "  and every desktop entry."
         ;;
     uinput)
         # The privileged half on its own. A bundle cannot carry

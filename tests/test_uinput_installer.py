@@ -277,6 +277,50 @@ def test_the_appimage_ships_the_installer_and_the_rule():
           "usr/share/glasspad/packaging/glasspad-udev.rules" in out.stdout)
 
 
+def test_uninstall_mode_is_narrow_and_rehearsable():
+    """The undo must not delete a layout nobody asked to lose.
+
+    install.sh --uninstall is the broad one: both prefixes, autostart, layout.json.
+    A bundle user removing a device rule should not lose 40 minutes of dragging
+    controls into place, so --uninstall-uinput exists and names only two files.
+    """
+    r = sh([os.path.join(ROOT, "install.sh"), "--uninstall-uinput", "--dry-run"])
+    check(f"rehearses without root (exit {r.returncode})", r.returncode == 0)
+    check("names the two files it would remove",
+          "modules-load.d/uinput.conf" in r.stdout and "99-glasspad-uinput.rules" in r.stdout)
+    lowered = r.stdout.lower()
+    check("says nothing about deleting the layout", "layout.json" not in lowered)
+    check("says nothing about desktop entries or autostart",
+          "autostart" not in lowered and ".desktop" not in lowered)
+    check("and confirms it changed nothing", "dry run: nothing changed" in r.stdout)
+
+
+def test_uninstall_flag_follows_the_privilege_rule():
+    """Same contract as install: --dry-run stays in sh, a real run elevates."""
+    import subprocess as sp
+    import glasspad.__main__ as m
+    calls, real = [], sp.call
+    sp.call = lambda cmd, *a, **k: (calls.append(list(cmd)), 0)[1]
+    try:
+        m.uninstall_uinput(["--dry-run"])
+        check(f"dry run does not elevate ({calls[-1][:2]})", calls[-1][0] == "sh")
+        check(f"dry run still asks for the narrow mode ({calls[-1]})",
+              "--uninstall-uinput" in calls[-1] and "--dry-run" in calls[-1])
+        m.uninstall_uinput([])
+        check("a real run elevates", calls[-1][0] in ("pkexec", "sudo"))
+        check("and runs no broad uninstall",
+              calls[-1][-1] == "--uninstall-uinput" and "--uninstall" not in calls[-1][:-1])
+    finally:
+        sp.call = real
+
+
+def test_uninstall_is_documented_in_both_places():
+    r = sh([os.path.join(ROOT, "install.sh"), "--help"])
+    check("install.sh --help lists --uninstall-uinput", "--uninstall-uinput" in r.stdout)
+    h = sh([sys.executable, "-m", "glasspad", "--help"])
+    check("the app's own --help lists it too", "--uninstall-uinput" in h.stdout)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

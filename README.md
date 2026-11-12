@@ -109,7 +109,42 @@ python3 -m glasspad --null-pad # UI only, no virtual device
 ./GlassPad-1.1.0-x86_64.AppImage --install-uinput      # one password, once
 ./GlassPad-1.1.0-x86_64.AppImage --install-desktop     # menu entry + icon, no root
 ./GlassPad-1.1.0-x86_64.AppImage                       # the overlay
+./GlassPad-1.1.0-x86_64.AppImage --uninstall-uinput    # take the rule back
 ```
+
+Every one of those works from the downloaded file alone, with no repository and no
+package. `--dry-run` rehearses the two that touch the system, and elevates in neither
+case — asking for a password to read a plan is absurd.
+
+### From a virgin system, what one file can and cannot do
+
+| | |
+| --- | --- |
+| **Virtual gamepad** | `--install-uinput`, one password. It carries `packaging/glasspad-udev.rules` and the script that installs it, escalates through `pkexec`, adds your account to `input`, and then asks the *account* — not root — whether the device is writable, because root can always write it and a root-side verdict would be a lie. |
+| **A menu entry** | `--install-desktop`. Writes `org.glasspad.GlassPad.desktop` with `Exec=` from `$APPIMAGE`, the runtime's own record of the file you ran, and puts the icon in your own icon theme. |
+| **Undoing either** | `--uninstall-uinput`, `--uninstall-desktop`. Both are narrow on purpose: neither touches your layout, your profiles, the `input` group, or the loaded kernel module. |
+| **`libgtk4-layer-shell`** | **The one thing no packaging format can bring.** It has to match the host's `libwayland` *and* GTK 4; a bundled copy that mismatches gives a blank overlay instead of an error. So the app finds it, says which rule matched, and if it is missing prints the command for your distro (`pacman -S libgtk4-layer-shell` / `apt install libgtk4-layer-shell0` / `dnf install libgtk4-layer-shell`) and exits nonzero rather than starting something invisible. |
+| **A compositor with `zwlr_layer_shell_v1`** | KWin, Hyprland, Sway, wlroots yes; stock GNOME no. Nothing installs this. |
+
+So the honest instruction for a new user is: **one file, plus one package-manager
+command if their distro lacks `libgtk4-layer-shell`** — and on many gaming machines even
+the udev step is redundant, because KDE Connect (`40-kdeconnect-uinput.rules`) and Steam
+(`60-steam-input.rules`) both ship `TAG+="uaccess"` for `/dev/uinput`, which hands the
+node to whoever is logged in at the console. That is why `--uninstall-uinput` explains a
+still-writable device instead of claiming success in both directions.
+
+### Where `install.sh` fits now
+
+It is not a second thing to hand over. The AppImage **packs it** —
+`usr/share/glasspad/install.sh` — and `--install-uinput` is a thin front end that
+resolves that file and runs it under `pkexec`. Delete it from the tree and the one-file
+install loses the ability to grant `/dev/uinput`, which is precisely the failure that
+leaves a newcomer with controls that light up and convey nothing.
+
+The modes a bundle needs are `--uinput` and `--uninstall-uinput`. The rest — `--user`,
+`--autostart`, `--check`, the broad `--uninstall` — are for installing from a checkout,
+and are the reason `glasspad --install-desktop` exists separately rather than being
+shelled out to: a menu entry has nothing to do with a source tree.
 
 `--install-desktop` writes `org.glasspad.GlassPad.desktop` into `$XDG_DATA_HOME` and the
 icon into the user's own icon theme, pointing `Exec=` at `$APPIMAGE` — the runtime's own
@@ -329,6 +364,7 @@ without pytest:
 | `test_bundle.py` | finding `libgtk4-layer-shell` on Arch, Fedora, Debian, or inside a bundle — and a wrong override named, not swallowed |
 | `test_status_cli.py` | `--status` describes the backend you run, and exits nonzero when the overlay could not |
 | `test_desktop_entry.py` | where a bundle's menu entry points, that `Icon=` is never a mount path, and that an uninstall leaves the saved layout alone |
+| `test_uinput_installer.py` | the rule's contents, both refusal paths, that `--dry-run` never elevates and a real run always does, `PKEXEC_UID` resolution, and that the undo names two files and not the user's layout |
 | `test_press_look.py` | what a press looks like (round stays round, no clipping) |
 | `test_press_release.py` | what a press *does* (pad events, gating, easing) |
 | `test_dpad_variants.py` | d-pad indicator, cross and press variants |
