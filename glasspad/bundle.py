@@ -125,5 +125,6 @@ def uinput_ready(path: str = UINPUT_PATH) -> tuple[bool, str]:
 def describe() -> str:
     """One line for --status and for the startup banner."""
     p, why = layer_shell_path()
-    # label padded to match the other --status lines; install.sh prints this verbatim
-    return f"layer-shell     : {p or 'NOT FOUND'} ({why})"
+    # install.sh prints this line among its own, whose labels are padded to 12 before the
+    # colon; "layer-shell" is 11 characters, so one space lines the colons up.
+    return f"layer-shell : {p or 'NOT FOUND'} ({why})"
