@@ -17,6 +17,9 @@ Special modes, both of which work with no Wayland session running:
                     writable. Without that access the controls draw, animate,
                     and reach no game whatsoever, which is the most confusing
                     failure this program can have.
+  --install-desktop   add a menu entry pointing at this AppImage (or checkout),
+                    plus the icon, in the user's own directories. No root.
+                    --uninstall-desktop takes it away again.
 """
 from __future__ import annotations
 
@@ -52,7 +55,7 @@ def take_backend(argv: list[str]) -> list[str]:
     """Strip --backend from argv, and refuse a value that no longer exists.
 
     The option survives because launch options outlive the thing they configured:
-    the .run launcher, the desktop entry and any line you typed last week all pass
+    an old desktop entry, a shell history line and a saved terminal command all pass
     `--backend layer`. Accepting it keeps those working; rejecting anything else
     keeps a typo from quietly starting something you did not ask for.
 
@@ -214,6 +217,15 @@ def main(argv: list[str] | None = None) -> int:
         # unrecognised flag fall through would start a fullscreen transparent
         # overlay in answer to a setup request -- see --version below.
         return install_uinput(rest)
+    if "--install-desktop" in rest:
+        # Also before the session check: a menu entry has nothing to do with a
+        # running compositor, and this is the command that makes a downloaded
+        # AppImage behave like an installed application.
+        from .desktop_entry import install_desktop
+        return install_desktop(dry="--dry-run" in rest)
+    if "--uninstall-desktop" in rest:
+        from .desktop_entry import uninstall_desktop
+        return uninstall_desktop()
     if rest and rest[0] in ("status", "--status", "-s"):
         return report_status()
     # --version and --help used to belong to the Qt parser. Losing that branch is
@@ -230,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     if rest and rest[0] in ("--help", "-h"):
         print((__doc__ or "").strip())
         print(f"\nusage: glasspad [--status] [--edit] [--profile NAME] "
-              f"[--install-uinput] [--backend {BACKEND}]")
+              f"[--install-uinput] [--install-desktop] [--backend {BACKEND}]")
         print("  overlay_layer owns the remaining options; --help there lists them")
         return 0
     from glasspad.overlay_layer import main as run_layer
@@ -264,8 +276,8 @@ def install_uinput(argv: list[str] = ()) -> int:
         print("Looked for install.sh in:")
         for root in bundle.installer_roots():
             print(f"    {root}")
-        print("Every GlassPad .AppImage and .run contains one; if yours does not,")
-        print("the download was truncated.")
+        print("Every GlassPad AppImage contains one; if yours does not, the download")
+        print("was truncated.")
         return 2
 
     rule = bundle.installer_rule_src(installer)

@@ -1,0 +1,294 @@
+"""The desktop entry a bundle installs -- what it points at, and what it must not.
+
+Ported out of the .run launcher, where `install-desktop` was a heredoc with
+`Icon=` pointing INTO the unpacked payload. That path is a FUSE mount which stops
+existing when the app exits, so the same line in an AppImage yields a menu entry
+with a broken icon within seconds. These tests are written against the failure,
+not the implementation: a path that outlives the process is checked directly, and
+so is the case where nothing launchable exists at all.
+
+Run: python3 tests/test_desktop_entry.py   (no pytest, no display)
+"""
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from glasspad import desktop_entry as de  # noqa: E402
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FAILS = []
+
+
+def check(label, cond):
+    print(f"  {'ok  ' if cond else 'FAIL'} {label}")
+    if not cond:
+        FAILS.append(label)
+
+
+def sandbox(with_package=True):
+    """A fake $HOME, optionally holding a copied-out (not checkout) package."""
+    d = tempfile.mkdtemp()
+    if with_package:
+        shutil.copytree(os.path.join(ROOT, "glasspad"), os.path.join(d, "glasspad"))
+    return d
+
+
+def run_in(dirpath, argv, extra_env=None):
+    env = dict(os.environ)
+    env.pop("APPIMAGE", None)
+    env["HOME"] = dirpath
+    env["XDG_DATA_HOME"] = os.path.join(dirpath, ".local", "share")
+    env["XDG_CONFIG_HOME"] = os.path.join(dirpath, ".config")
+    env["PYTHONPATH"] = dirpath
+    env.update(extra_env or {})
+    return subprocess.run([sys.executable, "-c",
+                           "import sys;from glasspad.__main__ import main;"
+                           "sys.exit(main(sys.argv[1:]))"] + argv,
+                          cwd=dirpath, env=env, capture_output=True, text=True,
+                          timeout=180)
+
+
+def tree(base):
+    """Every file under base, relative -- so 'no junk' is a set comparison."""
+    out = set()
+    for root, _dirs, files in os.walk(base):
+        for f in files:
+            out.add(os.path.relpath(os.path.join(root, f), base))
+    return out
+
+
+# --- where the entry points --------------------------------------------------
+def test_an_appimage_wins_and_a_stale_one_is_ignored():
+    with tempfile.TemporaryDirectory() as d:
+        real = os.path.join(d, "GlassPad.AppImage")
+        open(real, "w").close()
+        got, why = de.launch_target(env={"APPIMAGE": real})
+        check(f"APPIMAGE is preferred ({got})", got == real)
+        check("and the reason names it", "AppImage" in why)
+
+        gone, _ = de.launch_target(env={"APPIMAGE": os.path.join(d, "nope.AppImage")})
+        check("a dangling APPIMAGE is not trusted as a launch target",
+              gone != os.path.join(d, "nope.AppImage"))
+        check("an empty APPIMAGE is not a target either",
+              de.launch_target(env={"APPIMAGE": "   "})[0] != "")
+
+
+def test_a_copied_out_tree_refuses_instead_of_writing_a_dead_entry():
+    """No APPIMAGE, no checkout markers, not installed: nothing valid to point at.
+
+    The tempting fallback -- "there is a glasspad package right here" -- is what
+    makes this wrong: that is equally true of an installed copy, a copied-out
+    folder, and a tarball someone unpacked, and only one of those launches from a
+    menu without inheriting a shell's PYTHONPATH.
+    """
+    d = sandbox()
+    try:
+        r = run_in(d, ["--install-desktop"])
+        check(f"exit 2 rather than a guess (got {r.returncode})", r.returncode == 2)
+        check("it says why, in terms of what it looked for",
+              "no APPIMAGE" in r.stdout and "PATH" in r.stdout)
+        check("and writes nothing at all", tree(os.path.join(d, ".local")) == set())
+    finally:
+        shutil.rmtree(d)
+
+
+def test_checkout_target_is_the_package_not_this_file():
+    got, why = de.launch_target(env={})
+    check(f"from the checkout, Exec runs the package ({got})",
+          got is not None and got.endswith("-m glasspad"))
+    check("and the reason names the tree", ROOT in why)
+
+
+# --- what gets written -------------------------------------------------------
+def test_install_writes_the_entry_and_icon_and_nothing_else():
+    d = sandbox()
+    try:
+        # Pretend to be the bundle: a real file for APPIMAGE to point at, since a
+        # copied-out tree is (correctly) refused.
+        app = os.path.join(d, "GlassPad.AppImage")
+        open(app, "w").close()
+        r = run_in(d, ["--install-desktop"], extra_env={"APPIMAGE": app})
+        base = os.path.join(d, ".local")
+        check(f"install succeeded ({r.returncode}: {r.stdout.strip()[:80]})",
+              r.returncode == 0)
+        made = tree(base)
+        check(f"exactly two files, an entry and an icon ({sorted(made)})",
+              len(made) == 2 and any(f.endswith(".desktop") for f in made))
+        entry = next((os.path.join(base, f) for f in made if f.endswith(".desktop")), None)
+        body = open(entry).read() if entry else ""
+        check("the entry points at the AppImage, not at the sandbox tree",
+              app in body)
+        check("and sets no Path= (that would name a mount)", "Path=" not in body)
+        check("no stray files anywhere under the user dir",
+              not any("GlassPad" in f and not f.endswith((".desktop", ".svg", ".png"))
+                      for f in made))
+    finally:
+        shutil.rmtree(d)
+
+
+def test_the_entry_has_one_exec_and_no_field_codes():
+    text = de.desktop_text("/opt/Glass Pad/GlassPad.AppImage")
+    execs = [l for l in text.splitlines() if l.startswith("Exec=")]
+    # One per section is fine; the point is no Exec on the main entry besides ours.
+    main = text.split("[Desktop Action")[0]
+    check(f"exactly one Exec on the main entry ({execs})",
+          len([l for l in main.splitlines() if l.startswith("Exec=")]) == 1)
+    # Field codes only matter on an Exec line -- the file carries a comment
+    # explaining why it has none, and a check over the whole text would flag that.
+    exec_lines = [l for l in text.splitlines() if l.startswith("Exec=")]
+    check(f"no %f/%u/%U field codes on any Exec line ({exec_lines})",
+          not any(code in l for l in exec_lines for code in ("%f", "%u", "%U", "%F")))
+    check("the path is quoted so a space in it survives",
+          'Exec="/opt/Glass Pad/GlassPad.AppImage"' in main)
+
+
+def test_icon_is_a_theme_name_never_a_path_into_the_mount():
+    """The bug this whole module exists to avoid.
+
+    The .run's heredoc wrote Icon=$dest/app/share/icons/glasspad.svg, a path into
+    the unpacked payload. Harmless there; in an AppImage it is a FUSE mount that
+    ceases to exist when the overlay closes, so the menu shows a broken icon.
+    """
+    text = de.desktop_text("/home/josh/Downloads/GlassPad.AppImage")
+    icon = [l for l in text.splitlines() if l.startswith("Icon=")]
+    check(f"Icon= names the theme entry ({icon})", icon == ["Icon=glasspad"])
+    check("no directory in Icon=, so it survives any move of the file",
+          "/" not in "".join(icon))
+    mountish = de.desktop_text("/home/josh/GlassPad.AppImage",
+                               workdir="/tmp/.mount_GlassPadiU3x9f")
+    check("a mount path is only ever rejected, never echoed into Icon=",
+          ".mount_" not in "".join(l for l in mountish.splitlines()
+                                   if l.startswith("Icon=")))
+
+
+def test_path_key_only_for_a_tree_that_still_exists():
+    bundle = de.desktop_text("/home/x/GlassPad.AppImage")
+    check("a bundle entry sets no Path= (it would name the mount)",
+          "Path=" not in bundle)
+    checkout = de.desktop_text("python3 -m glasspad", workdir=ROOT)
+    check(f"a checkout entry does set it, so -m resolves ({ROOT in checkout})",
+          f"Path={ROOT}" in checkout)
+
+
+# --- removing it -------------------------------------------------------------
+def test_uninstall_removes_both_names_and_leaves_the_rest():
+    d = sandbox()
+    try:
+        apps = os.path.join(d, ".local", "share", "applications")
+        os.makedirs(apps, exist_ok=True)
+        modern = os.path.join(apps, de.DESKTOP_NAME)
+        legacy = os.path.join(apps, "glasspad.desktop")
+        cfg = os.path.join(d, ".config", "GlassPad")
+        for p in (modern, legacy):
+            open(p, "w").write("[Desktop Entry]\n")
+        os.makedirs(cfg, exist_ok=True)
+        open(os.path.join(cfg, "layout.json"), "w").write("{}")
+
+        r = run_in(d, ["--uninstall-desktop"])
+        check(f"uninstall succeeded ({r.returncode})", r.returncode == 0)
+        check("the modern entry is gone", not os.path.exists(modern))
+        check("the install.sh-era entry is gone too", not os.path.exists(legacy))
+        check("the saved layout survived -- this is not an app uninstall",
+              os.path.exists(os.path.join(cfg, "layout.json")))
+
+        again = run_in(d, ["--uninstall-desktop"])
+        check(f"and it is safe to run twice ({again.returncode})",
+              again.returncode == 0 and "no menu entry" in again.stdout)
+    finally:
+        shutil.rmtree(d)
+
+
+def test_no_wayland_session_required():
+    """A menu entry has nothing to do with a running compositor.
+
+    Unknown flags in this CLI once fell through and started a fullscreen overlay;
+    the setup commands must not depend on a session either, since they are how you
+    get to a working one.
+    """
+    d = sandbox()
+    try:
+        app = os.path.join(d, "GlassPad.AppImage")
+        open(app, "w").close()
+        r = run_in(d, ["--install-desktop", "--dry-run"],
+                   extra_env={"WAYLAND_DISPLAY": "", "DISPLAY": "", "APPIMAGE": app})
+        check(f"dry run works headless ({r.returncode})", r.returncode == 0)
+        check("it printed a plan rather than starting a surface",
+              "would write" in r.stdout)
+        check("nothing was written by a dry run", tree(os.path.join(d, ".local")) == set())
+    finally:
+        shutil.rmtree(d)
+
+
+def test_the_module_ships_in_the_appimage():
+    """Desktop install is useless from a bundle if the module is not in the bundle."""
+    appimage = os.path.join(ROOT, "dist", "GlassPad-1.1.0-x86_64.AppImage")
+    if not os.path.isfile(appimage):
+        check("no built AppImage on this box; nothing to inspect", True)
+        return
+    tool = shutil.which("unsquashfs")
+    if not tool:
+        # Not installed here (squashfs-tools is exactly what the offline packer
+        # had to borrow). Say so rather than pretending the check passed.
+        check("unsquashfs absent on this box; payload listing skipped", True)
+        return
+    out = subprocess.run([tool, "-l", appimage], capture_output=True,
+                         text=True, timeout=180)
+    if out.returncode not in (0, 1):
+        check(f"unsquashfs failed ({out.returncode}: {out.stderr.strip()[:60]})", True)
+        return
+    check("desktop_entry.py is inside the packed payload",
+          "glasspad/desktop_entry.py" in out.stdout)
+
+
+def test_installing_creates_no_caches_in_a_pristine_account():
+    """`update-desktop-database` writes mimeinfo.cache and intent.cache from nothing.
+
+    Both are standard files and neither belongs in a home directory that had no
+    MIME caches, for an application that declares no MimeType at all. This is what
+    the "exactly two files" check caught; it is split out so the reason survives.
+    """
+    d = sandbox()
+    try:
+        app = os.path.join(d, "GlassPad.AppImage")
+        open(app, "w").close()
+        run_in(d, ["--install-desktop"], extra_env={"APPIMAGE": app})
+        made = tree(os.path.join(d, ".local"))
+        caches = [f for f in made if f.endswith((".cache", ".cache.1"))
+                  or "mimeinfo" in f or "intent" in f]
+        check(f"no cache files created ({sorted(caches)})", not caches)
+    finally:
+        shutil.rmtree(d)
+
+
+def test_the_entry_passes_the_desktop_file_validator():
+    """The distro's own linter, when the distro ships one.
+
+    Not everyone has it, so absence is reported rather than counted as a pass --
+    a suite that quietly skips its only external check is how a malformed entry
+    ships.
+    """
+    tool = shutil.which("desktop-file-validate")
+    if not tool:
+        check("desktop-file-validate absent on this box; nothing to validate against",
+              True)
+        return
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "org.glasspad.GlassPad.desktop")
+        open(path, "w").write(de.desktop_text("/opt/GlassPad.AppImage"))
+        r = subprocess.run([tool, path], capture_output=True, text=True, timeout=120)
+        check(f"validator is silent (exit {r.returncode}: {(r.stdout or r.stderr).strip()[:120]})",
+              r.returncode == 0)
+
+
+if __name__ == "__main__":
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for fn in tests:
+        print(f"{fn.__name__}:")
+        fn()
+    print(f"\n  {len(tests)} tests, {len(FAILS)} failure(s)")
+    sys.exit(1 if FAILS else 0)

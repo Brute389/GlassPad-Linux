@@ -1369,6 +1369,9 @@ TRIMMED_TOOLS = frozenset({
     "hit_test.py", "layer_probe.py", "layer_probe.qml", "pad_probe.py",
     "render_dpad.py", "render_resize_previews.py", "render_stick_curve.py",
     "render_style.py", "resize_probe.py", "verify_screen.py",
+    # and the second bundle builder, retired when the project went AppImage-only;
+    # its install-desktop subcommand now lives in glasspad/desktop_entry.py
+    "make_bundle.py",
     # kept: uinput_watch.py and probe_real_pad.py, because this file tests them.
     # Dropping them would have dropped the only checks that a pad is real and
     # that no virtual device leaks behind the suite -- coverage, not clutter.

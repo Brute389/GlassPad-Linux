@@ -249,28 +249,32 @@ def test_a_deliberate_null_pad_stays_quiet():
 
 
 # --- packaging ---------------------------------------------------------------
-def test_both_packs_ship_the_installer_and_the_rule():
+def test_the_appimage_ships_the_installer_and_the_rule():
     """A bundle without these is a download that cannot finish installing.
 
-    Checked against make_bundle's own file list, so this fails when the staging
-    list changes rather than when somebody happens to build an artefact.
+    Checked against make_appimage.sh's staging loop, so this fails when the list
+    changes rather than only when somebody happens to build an artefact -- and,
+    when unsquashfs is available to look inside a built one, checked there too.
     """
-    sys.path.insert(0, os.path.join(ROOT, "tools"))
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("make_bundle",
-                                                  os.path.join(ROOT, "tools", "make_bundle.py"))
-    mb = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mb)
-    dests = [d for d, _ in mb.sources()]
-    check(f"the .run payload carries install.sh ({len(dests)} entries)",
-          any(d.endswith("install.sh") for d in dests))
-    check("the .run payload carries the udev rule",
-          any(d.endswith("glasspad-udev.rules") for d in dests))
     script = open(os.path.join(ROOT, "tools", "make_appimage.sh")).read()
-    check("the AppImage builder stages install.sh",
+    check("the AppImage builder stages install.sh beside the rule",
           "install.sh packaging/glasspad-udev.rules" in script)
-    check("and refuses to build without them",
-          "could not finish an install" in script)
+    check("and refuses to build without them", "could not finish an install" in script)
+    check("into the payload root the resolver searches",
+          '$appdir/usr/share/glasspad/$priv' in script)
+
+    appimage = sorted(__import__("glob").glob(
+        os.path.join(ROOT, "dist", "GlassPad-*.AppImage")))
+    tool = shutil.which("unsquashfs")
+    if not (appimage and tool):
+        check("no built AppImage or no unsquashfs here; contents not listed", True)
+        return
+    out = subprocess.run([tool, "-l", appimage[0]], capture_output=True, text=True,
+                         timeout=300)
+    check("install.sh is inside the packed payload",
+          "usr/share/glasspad/install.sh" in out.stdout)
+    check("the udev rule is inside the packed payload",
+          "usr/share/glasspad/packaging/glasspad-udev.rules" in out.stdout)
 
 
 if __name__ == "__main__":

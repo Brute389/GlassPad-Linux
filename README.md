@@ -102,31 +102,50 @@ python3 -m glasspad --status   # environment + backend report
 python3 -m glasspad --null-pad # UI only, no virtual device
 ```
 
-## Packaging: one file, and what a file cannot carry
+## Packaging: one AppImage, and what a file cannot carry
 
 ```bash
-python3 tools/make_bundle.py          # -> dist/glasspad-<version>-<arch>.run  (~615 KiB)
+./GlassPad-1.1.0-x86_64.AppImage --status              # read this first
+./GlassPad-1.1.0-x86_64.AppImage --install-uinput      # one password, once
+./GlassPad-1.1.0-x86_64.AppImage --install-desktop     # menu entry + icon, no root
+./GlassPad-1.1.0-x86_64.AppImage                       # the overlay
 ```
 
-The `.run` is one executable file: copy it to another machine, run it. It unpacks once
-under `$XDG_CACHE_HOME/glasspad/<version>-<payload hash>` and reuses that tree, so the hash
-in the path matters — keying it on the version alone means a rebuild on the same version
-keeps running the old payload forever.
+`--install-desktop` writes `org.glasspad.GlassPad.desktop` into `$XDG_DATA_HOME` and the
+icon into the user's own icon theme, pointing `Exec=` at `$APPIMAGE` — the runtime's own
+record of the file you ran. `--uninstall-desktop` removes it, under either name this
+project has ever used, and leaves the app, the icon and `~/.config/GlassPad` alone.
 
-```bash
-./glasspad-1.1.0-x86_64.run                    # the overlay
-./glasspad-1.1.0-x86_64.run status             # what it found, and what is missing
-./glasspad-1.1.0-x86_64.run install-desktop    # menu entry pointing at this file
-./glasspad-1.1.0-x86_64.run uninstall-desktop
-```
+**The build tool runs what it wrote.** The staged AppDir's `AppRun --status` executes with
+bytecode writing disabled before packing is allowed, and the suite is the gate: a red test
+stops the artefact. That discipline came from the first bundle this project shipped — a
+self-extracting `.run` whose build ran `--version`, `status`, a repeat run and
+`install-desktop` in a sandboxed `$HOME`, and caught a launcher bug that would otherwise
+have shipped: `\${XDG_DATA_HOME}` reached the shell escaped and stayed literal, so
+`install-desktop` tried to `mkdir` a directory named `${XDG_DATA_HOME:-`.
 
-**The build tool executes what it wrote** — `--version`, `status`, a repeat run, and
-`install-desktop` inside a sandboxed `$HOME` — and refuses to call the artefact done
-otherwise. That gate has already caught a launcher bug which would otherwise have shipped:
-`\${XDG_DATA_HOME}` reached the shell escaped and stayed literal, so `install-desktop` tried
-to `mkdir` a directory named `${XDG_DATA_HOME:-`.
+### What was dropped, and what it actually cost
 
-### AppImage
+`tools/make_bundle.py` and its `.run` are gone. Two things did not transfer, and neither
+was load-bearing:
+
+* **Menu-entry installation.** It lived only in the `.run` launcher. It is now
+  `glasspad --install-desktop`, in the app, where the AppImage can use it too — which was
+  the point: an AppImage previously had no way to become an application, only a thing you
+  run from a terminal. Its `Icon=` also stops pointing into the payload, which for an
+  AppImage is a FUSE mount that vanishes on exit and leaves a broken icon in the menu.
+* **Running without FUSE.** True, and worth nothing here: GlassPad needs a Wayland
+  compositor advertising `zwlr_layer_shell_v1` and a writable `/dev/uinput`, so every
+  environment where the lack of FUSE would have rescued the `.run` is an environment where
+  the overlay cannot work anyway. Where FUSE genuinely is missing, the AppImage's own
+  `--appimage-extract-and-run` (or `--appimage-extract`, then `./squashfs-root/AppRun`)
+  does the same job with no mount.
+
+What keeping both cost was every packaging change written twice — the udev rule and the
+installer went into both builders in a single day — plus a third payload layout for the
+path resolvers to keep handling.
+
+### Type-2 internals, and borrowing tools offline
 
 ```bash
 ./tools/make_appimage.sh                        # AppDir, then a real .AppImage
@@ -309,7 +328,7 @@ without pytest:
 | `test_profiles.py` | name validation, fallback order, the claim file, and when a switch is allowed |
 | `test_bundle.py` | finding `libgtk4-layer-shell` on Arch, Fedora, Debian, or inside a bundle — and a wrong override named, not swallowed |
 | `test_status_cli.py` | `--status` describes the backend you run, and exits nonzero when the overlay could not |
-| `test_bundle_artifact.py` | the built `.run` executes from an empty environment; the launcher header parses as POSIX `sh` |
+| `test_desktop_entry.py` | where a bundle's menu entry points, that `Icon=` is never a mount path, and that an uninstall leaves the saved layout alone |
 | `test_press_look.py` | what a press looks like (round stays round, no clipping) |
 | `test_press_release.py` | what a press *does* (pad events, gating, easing) |
 | `test_dpad_variants.py` | d-pad indicator, cross and press variants |
@@ -411,7 +430,7 @@ What works instead:
 | `tools/uinput_watch.py` | Snapshots kernel input devices and reports any pad a test leaked. `run -- <cmd>` wraps the suite so nothing hides between steps. |
 | `tools/run_tests.py` | Runs the pytest-style suite with no pytest installed, including the uinput-safety legs. `check_all.py` calls it; you rarely need to. |
 | `tools/check_all.py` | Every suite plus the live self-test; exit status is real, and a suite that cannot start counts as failing. |
-| `tools/make_bundle.py` | Build **and run** the single-file `.run` bundle; refuses to call it done until the artefact has executed cleanly. |
+| `tools/make_appimage.sh` | Stage the AppDir (validated desktop entry, `AppRun`), run it, then pack; cleans its own scratch on success. |
 | `tools/make_appimage.sh` | Stage the AppDir (validated desktop entry, `AppRun`), run it, then pack if the tooling exists — and say plainly what is missing when it does not. |
 | `tools/glasspad-profile` | Claim a profile for the overlay (`--seed`, `--list`, `--status`, `--clear`). Exits 0 unless the *arguments* were wrong — a launcher must never fail because of the overlay. |
 | `tools/mk_appimage_offline.py` | Pack a staged AppDir into a real type-2 `.AppImage` with a borrowed `mksquashfs` and runtime, checking the payload offset and the packed md5. |
@@ -892,7 +911,6 @@ names it and says how many places it looked, rather than rendering an empty box 
 is what the pill used to do, one step better than reporting success while opening
 nothing.
 
-Both documents are conditions of shipping, so `tools/make_bundle.py` and
-`tools/make_appimage.sh` abort when either is absent, and the artefact suites import the
-packed `bundle.py` from inside each artefact to prove the panel resolves them in the
-layouts that only exist after packing.
+Both documents are conditions of shipping, so `tools/make_appimage.sh` aborts when either
+is absent, and the artefact suite imports the packed `bundle.py` from inside the AppImage to
+prove the panel resolves them in the layout that only exists after packing.

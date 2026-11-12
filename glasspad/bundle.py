@@ -144,9 +144,12 @@ def doc_roots() -> list[str]:
     The three layouts differ and none of them is "next to the code":
 
         checkout    <repo>/glasspad/bundle.py            -> <repo>/
-        .run        app/glasspad/bundle.py               -> app/
         AppImage    usr/share/glasspad/glasspad/bundle.py -> usr/share/glasspad,
                     while the documents are staged under usr/share/doc/glasspad
+
+    A third layout, app/glasspad/, belonged to the self-extracting .run bundle and
+    went with it. Nothing below specialises in a layout: the search walks candidate
+    roots, so whatever a payload directory happens to be called is not a case.
 
     A single hardcoded dirname() is how the About box ended up reporting a licence
     path it had opened successfully when it had opened nothing at all. Searching is
@@ -216,7 +219,6 @@ def read_doc(name: str) -> tuple[str, str | None]:
 # to the same three places:
 #
 #     checkout    <repo>/glasspad/bundle.py      -> <repo>/install.sh
-#     .run        app/glasspad/bundle.py         -> app/install.sh
 #     AppImage    usr/share/glasspad/glasspad/   -> usr/share/glasspad/install.sh
 
 INSTALLER_ROOT_ENV = "GLASSPAD_INSTALLER_DIR"
