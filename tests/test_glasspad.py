@@ -160,6 +160,48 @@ class TestXbox360Abi:
 # ---------------------------------------------------------------------------
 # PadService
 # ---------------------------------------------------------------------------
+    def test_the_wrong_button_codes_are_pinned_too(self):
+        """BTN_0 and BTN_TRIGGER exist as a fence, so their numbers must be asserted.
+
+        They map no key. They are defined because an earlier revision of this port used
+        0x100 / 0x120 for the Guide button, and a name that does not exist gets defined
+        from memory the next time someone needs it. A fence is only worth having if
+        something checks it is still standing: the values are the kernel's, from
+        input-event-codes.h, and they are asserted here rather than trusted.
+        """
+        import glasspad.xd360 as X
+
+        assert X.BTN_0 == 0x100, hex(X.BTN_0)
+        assert X.BTN_TRIGGER == 0x120, hex(X.BTN_TRIGGER)
+        # and the Guide button is BTN_MODE (xpad360_btn[] in xpad.c), which is the
+        # whole point of the fence: an earlier revision mapped Guide to one of these.
+        assert X.BTN_MODE == 0x13C, hex(X.BTN_MODE)
+        assert X.BTN_MODE not in (X.BTN_0, X.BTN_TRIGGER)
+
+    def test_about_box_quotes_the_abi_it_builds(self):
+        """The number a user pastes into a bug report must be the number we send.
+
+        The About box used to carry "ABI v5" as prose next to a struct built from
+        UINPUT_VERSION = 5. Two sources, one of which is invisible to the compiler --
+        and this port's whole bug class is an ABI constant whose name is right and
+        whose number is off by one. Interpolated now, and asserted here, because the
+        failure this prevents is a field report about a kernel ABI that was never the
+        one in the report.
+        """
+        import pathlib
+        import glasspad.xd360 as X
+
+        hub = pathlib.Path(X.__file__).with_name("overlay_layer.py").read_text()
+        assert "ABI v{xd360.UINPUT_VERSION}" in hub, (
+            "the About box stopped interpolating the ABI constant; if it has a literal "
+            "again, say so here and keep them in step by hand")
+        assert 'ABI v5' not in hub, "a hardcoded ABI version is back in the hub"
+        assert X.UINPUT_VERSION == 5, (
+            "the ABI number changed -- that is a kernel-facing change, not a string edit; "
+            "re-read uinput.h and the EVIOCREVOKE/struct uinput_setup layout before "
+            "letting this pass")
+
+
 class TestPadService:
     def _pad(self):
         backend = NullBackend()

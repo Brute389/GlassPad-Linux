@@ -39,7 +39,6 @@ STROKE_COLOR = (1.0, 1.0, 1.0, 200 / 255)      # Color.FromArgb(200,255,255,255)
 STROKE_WIDTH = 1.5
 LABEL_COLOR = (1.0, 1.0, 1.0, 220 / 255)       # Color.FromArgb(220,255,255,255)
 LABEL_FAMILY = "Segoe UI"                      # fontconfig falls back on Linux
-LABEL_WEIGHT = "bold"
 PILL_LABEL_RATIO = 0.38                        # Lbl(tag, bh * 0.38)
 CIRCLE_LABEL_RATIO = 0.32                      # Lbl(tag, d * 0.32)
 
@@ -76,7 +75,6 @@ DPAD_RING_SIZE = 200.0                            # 8-way indicator ring
 DPAD_RING_FILL = (0.0, 180 / 255, 1.0, 60 / 255)
 DPAD_RING_STROKE = (0.0, 220 / 255, 1.0, 200 / 255)
 DPAD_RING_STROKE_W = 2.5
-DPAD_LABEL_COLOR = (1.0, 1.0, 1.0, 210 / 255)
 
 
 def cross_polygon(outer: float = DPAD_BASE, arm: float = DPAD_ARM) -> list[tuple[float, float]]:
@@ -110,7 +108,6 @@ GRIP_RING = (1.0, 1.0, 1.0, 0.92)
 
 # -- hub (MainWindow.xaml + MainWindow.xaml.cs) ---------------------------
 FAB_SIZE = 44.0
-FAB_RADIUS = 22.0                               # CornerRadius="22"
 FAB_FONT = 18.0                                 # FontSize="18"
 FAB_PRESSED_OPACITY = 0.7                       # IsPressed trigger
 HUB_CANVAS = (230.0, 200.0)
@@ -149,26 +146,19 @@ def ease_out_cubic(t: float) -> float:
 # -- settings panel (MainWindow.xaml EditPanel) ---------------------------
 PANEL_BG = "#DD1a1a2e"
 PANEL_RADIUS = 12.0
-PANEL_PADDING = (16.0, 12.0)
 PANEL_MIN_WIDTH = 260.0
-PANEL_LABEL_COLOR = "#AAC0D0FF"
-PANEL_LABEL_SIZE = 11.0
 PILLBTN_RADIUS = 8.0
 PILLBTN_FONT = 12.0
 BTN_W, BTN_H = 106.0, 30.0
-BTN_H_TALL = 32.0
 BTN_ACTIVE = "#CC208060"
 BTN_INACTIVE = "#80406090"
 BTN_RESET = "#CC804020"
-CONFIRM_BG = "#F01a1a2e"
-CONFIRM_RADIUS = 14.0
-CONFIRM_OK_COLOR = "#88EEBB"
 
 # -- font fallback note ---------------------------------------------------
 # The client asks for Segoe UI, which is not present on Linux; fontconfig maps it
 # (fc-match 'Segoe UI' here resolves to Adwaita Sans). The request is kept as-is
-# so the port follows whatever the user's fontconfig decides, exactly as it does
-# on the Qt side, rather than hardcoding a substitution that would be wrong on a
+# so the port follows whatever the user's fontconfig decides, exactly as the client
+# does on Windows, rather than hardcoding a substitution that would be wrong on a
 # machine that does have Segoe UI.
 
 
@@ -397,9 +387,13 @@ def paint_panel_bg(cr, w: float, h: float, fill: str = PANEL_BG,
 
 
 # -- hub states and panels -------------------------------------------------
-# Ported from glasspad/window.py, which is itself a port of MainWindow.xaml.
-# These live here rather than in overlay_layer so the two backends can be checked
-# against one another for agreement.
+# Transcribed from MainWindow.xaml. What the widgets actually paint with lives in the
+# CSS sheet in overlay_layer, converted out of WPF's #AARRGGBB order -- what is kept
+# here is the geometry and wording that cairo and the hub read, and nothing else.
+# A constant nobody references is not a spec, it is a second opinion, and the ones
+# deleted here disagreed with the sheet: "#AAC0D0FF" in WPF is alpha 0xAA over
+# #C0D0FF, i.e. rgba(192,208,255,0.667), not an opaque light slate.
+# tests/test_orphan_constants.py refuses to let that pile up again.
 
 #: The disable button's latched-off colour. window.py spells both states as
 #: #AARRGGBB strings; the enabled one is HUB_BUTTONS["disable"][0] (#CCE07030).
@@ -413,13 +407,6 @@ TOOLTIP_DISABLED = "Overlay hidden - click to bring the controls back"
 #: EditPanel top: 8 hub margin + 200 hub canvas + 4 gap (WPF Margin="0,212,0,0").
 EDIT_PANEL_TOP = 212.0
 
-INFO_BG = "#F01a1a2e"
-INFO_RADIUS = 16.0
-INFO_PADDING = (36.0, 28.0)
 INFO_MIN_WIDTH = 320.0
-CONFIRM_PADDING = (28.0, 22.0)
 CONFIRM_MIN_WIDTH = 280.0
-CONFIRM_BODY_COLOR = "#AAC0D0FF"
 
-PANEL_GREY = "#CC404055"
-PANEL_GREY_DIM = "#80406090"

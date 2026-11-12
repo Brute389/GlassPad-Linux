@@ -4,6 +4,51 @@ Version numbers here belong to the **Linux port**. The Windows original stays
 1.0.2 forever, and docstrings throughout the tree that say "ported from GlassPad
 1.0.2" name that source release — they are provenance, not this version, and do
 not move on a bump. `test_version_strings_agree()` pins the distinction.
+## Unreleased — dead spec constants deleted, one number corrected
+
+Seventeen unreferenced constants removed from `layer_style.py`. They were not spare
+documentation; they were a competing spec. `PANEL_LABEL_COLOR`, `CONFIRM_BODY_COLOR` and
+the rest spelled their colours the WPF way (`#AARRGGBB`) and were never wired to anything,
+while the CSS sheet in `overlay_layer.py` — the thing that actually paints — carries the
+converted values (`#AAC0D0FF` = alpha `0xAA` = 0.667 over `#C0D0FF`). Wiring them up, the
+obvious tidy-up, would have recoloured the About box and the confirm dialog.
+
+Found while checking them against `MainWindow.xaml`, both fixed in the CSS sheet with the
+XAML element and attribute named alongside:
+
+* **About box corner radius**: `InfoPanel CornerRadius="16"`, `SaveConfirmPanel 14`, and a
+  single shared rule gave both 14. Now split, so the About box has the radius the client
+  has.
+* **Settings-panel padding**: XAML says `16,12`, the sheet paints `20px` across / `14px`
+  down. Left as-is and *documented as a divergence* — the panel's visible size was tuned
+  against captures, and changing it is an 8×4 px edit to a box a user looks at. A tidy
+  number is not evidence.
+
+`xd360.UINPUT_VERSION` was made load-bearing instead of deleted: the About box printed
+`ABI v5` in prose next to a struct built from that constant, so a user's bug report could
+quote a number nothing enforced. It is interpolated now, and `TestXbox360Abi` asserts the
+caption tracks the constant — this port's recorded bug class is an ABI name that is right
+and a number that is off by one. `BTN_0` / `BTN_TRIGGER` exist purely as a fence against
+reusing those codes for Guide; a fence with nothing checking it is decoration, so their
+kernel values are asserted too (verified: corrupting `BTN_MODE` to `0x120` fails four
+tests).
+
+`tests/test_orphan_constants.py` is the guard: any module-level `UPPER_CASE` constant in
+the package must be loaded or attribute-accessed somewhere in `glasspad/`, `tests/` or
+`tools/`, with an allowlist whose entries must state who reads them. It checks itself
+against a synthetic tree (the control found nothing at all until the package directory was
+parameterised — same silent-green shape this whole pass is chasing), and an allowlist entry
+for a constant that later becomes used fails, so exemptions cannot fossilise.
+
+Incident during the sweep, worth recording: the deletion script sorted its spans as tuples,
+which ordered them by *name* rather than position, so each deletion shifted the offsets of
+the rest. Five of seventeen went, and three constants that were in use — `FAB_FONT`,
+`PILLBTN_RADIUS`, `CONFIRM_MIN_WIDTH` — went with them, plus lines from the font-fallback
+comment. The file still parsed and the diff still looked like a cleanup. Caught by diffing
+against git line by line rather than trusting the script's own report.
+
+Suite: 21 suites, 215 stdlib + 86 pytest-style + 85 live checks, zero skips.
+
 ## Unreleased — the Qt backend is deleted, not quarantined
 
 Eight modules gone: `window.py`, `widgets.py`, `layout.py`, `zones.py`,

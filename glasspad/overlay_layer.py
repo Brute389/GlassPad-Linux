@@ -93,6 +93,7 @@ from glasspad import layer_press as LP  # noqa: E402
 from glasspad import layer_style as S  # noqa: E402
 from glasspad import layer_profiles as prof
 from glasspad import pad  # noqa: E402
+from glasspad import xd360  # noqa: E402
 from glasspad.layer_turbo import (  # noqa: E402
     DEFAULT_TURBO_HZ,
     TAP_SLOP,
@@ -186,10 +187,16 @@ CSS = """
    at 38% alpha, not the app's green at 80% -- the same trap window.py documents for
    QColor(r,g,b,a). rgba() form is therefore mandatory in this sheet. */
 window.ctrl, window.hub, window.panelwin { background: transparent; }
+/* EditPanel: Background #DD1a1a2e -> 0.867 over (26,26,46), CornerRadius 12. */
+/* padding: xaml EditPanel says Padding="16,12"; this sheet paints 20px across,
+   14px down. Divergence left deliberately -- it predates this note, and the
+   panel's on-screen size was tuned against captures rather than against the
+   attribute. Changing it to 16px 12px is a real 8x4 px change to a visible box,
+   so it wants eyes on the result, not a tidy number in a file. */
 .panel { background: rgba(26,26,46,0.867); border-radius: 12px; padding: 14px 20px; }
-.confirm, .info { background: rgba(26,26,46,0.941); border-radius: 14px; }
-.info    { padding: 28px 36px; }
-.confirm { padding: 22px 28px; }
+.confirm, .info { background: rgba(26,26,46,0.941); }
+.info    { border-radius: 16px; padding: 28px 36px; }  /* InfoPanel: 16, "36,28" */
+.confirm { border-radius: 14px; padding: 22px 28px; }  /* SaveConfirmPanel: 14, "28,22" */
 /* padding, not margin_*: the app's panels are a Border with Padding, so the fill
    covers the padding. margin_* sits OUTSIDE the background and leaves a transparent
    ring inside the panel's own edge -- measured, that cost each panel 40 px of width
@@ -1955,7 +1962,10 @@ class Overlay:
         box.append(self._caption("github.com/dansunmi/GlassPad", "url"))
         # window.py prints BACKEND_LABEL because the Linux pad is created by the
         # kernel's uinput rather than by the HIDMaestro SDK the original cites.
-        box.append(self._caption("Linux uinput backend (ABI v5)", "backend"))
+        # Interpolated, not typed: this is the number a bug report quotes, and
+        # "name right, number off by one" is this port's recorded bug class.
+        box.append(self._caption(f"Linux uinput backend (ABI v{xd360.UINPUT_VERSION})",
+                                "backend"))
         box.append(self._caption(f"GlassPad v{__version__} (Linux)", "ver"))
         self.status_label = self._caption(pad_state, "status")
         box.append(self.status_label)

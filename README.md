@@ -170,7 +170,7 @@ Three commands, in order of how much they cost:
 ```bash
 python3 -m glasspad --status      # this machine: library, compositor, /dev/uinput, profiles
 ./install.sh --check              # uinput module, group, udev rule, desktop entry
-python3 tools/check_all.py        # the whole suite: 20 suites, ~19 s
+python3 tools/check_all.py        # the whole suite: 21 suites, ~19 s
 ```
 
 `install.sh --check` changes nothing; it is the "why is there no overlay on screen"
@@ -204,8 +204,8 @@ Current tallies here:
 
 | piece | tally |
 | --- | --- |
-| stdlib suites | **211 passed** |
-| pytest-style suite, via `tools/run_tests.py` | **84 passed, 0 skipped** |
+| stdlib suites | **215 passed** |
+| pytest-style suite, via `tools/run_tests.py` | **86 passed, 0 skipped** |
 | in-app self-test (`GLASSPAD_SELFTEST`: real hub, resize, rotation, profiles, turbo) | **85 checks** |
 
 Those numbers are what `tools/check_all.py` prints on this machine, not an assertion — no
@@ -223,7 +223,7 @@ desktop skipped them. Those tests went with the backend they tested, and the res
 stating plainly because it changed what a green run means:
 
 ```bash
-env -u DISPLAY -u WAYLAND_DISPLAY python3 tools/run_tests.py   # 84 passed, 0 skipped
+env -u DISPLAY -u WAYLAND_DISPLAY python3 tools/run_tests.py   # 86 passed, 0 skipped
 ```
 
 Nothing skips, so nothing is quietly unmeasured on the machine most users have. The live
@@ -233,6 +233,30 @@ skipped rather than passed when there isn't one.
 `tools/run_tests.py` also drives the two uinput-safety legs: it runs with opening a real
 pad made impossible and counts how many times the code tried, which is the only way to see
 a test that passes *because* the backend swallowed an error.
+
+### Constants that read like a spec
+
+`layer_style.py` carried seventeen module-level constants that no code referenced —
+colours transcribed from `MainWindow.xaml` and never wired to a renderer. They looked
+like the spec and were not: three were `"#AAC0D0FF"`, which in WPF is alpha `0xAA` over
+`#C0D0FF`, i.e. `rgba(192,208,255,0.667)` — exactly what the live CSS says. An unreferenced
+constant is a second opinion, and this one was wrong in a way only the Windows tree could
+adjudicate. All seventeen are gone; `tests/test_orphan_constants.py` now fails the package
+if a new one appears, with an allowlist for anything that genuinely documents — each entry
+requiring a sentence about who reads it.
+
+Two things the sweep found, both fixed and attributed in the CSS sheet:
+
+* `InfoPanel CornerRadius="16"`, `SaveConfirmPanel CornerRadius="14"` — one rule gave both
+  14, so the About box was drawn with the confirm dialog's corners.
+* `EditPanel Padding="16,12"` while the sheet paints `20px` across, `14px` down. **Left
+  alone deliberately**: it predates the note, the panel's on-screen size was tuned against
+  captures, and closing the gap is a visible 8×4 px change that wants eyes on the result
+  rather than a tidy number in a file.
+
+`xd360.UINPUT_VERSION` went the other way — from unreferenced to load-bearing. The About
+box printed `ABI v5` as prose next to a struct built from that constant, and the number a
+user pastes into a bug report is the number that must not drift.
 
 ### Layer-backend suites
 
@@ -249,6 +273,7 @@ without pytest:
 | `test_stick_tuning.py` | parity with `StickZone.Apply()`, monotonicity, the nub following the deflection |
 | `test_lockout.py` | a contact we released cannot press again until it ends; the next touch works |
 | `test_edge.py` | the band refuses the bezel and never the button, on the real layouts and after a rotation |
+| `test_orphan_constants.py` | nothing in the package declares a constant no code reads — see "Constants that read like a spec" |
 | `test_profiles.py` | name validation, fallback order, the claim file, and when a switch is allowed |
 | `test_bundle.py` | finding `libgtk4-layer-shell` on Arch, Fedora, Debian, or inside a bundle — and a wrong override named, not swallowed |
 | `test_status_cli.py` | `--status` describes the backend you run, and exits nonzero when the overlay could not |

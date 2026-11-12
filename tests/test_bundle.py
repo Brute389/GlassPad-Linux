@@ -149,6 +149,27 @@ def test_describe_mentions_both_halves():
           line.startswith("layer-shell") and "(" in line and ")" in line)
 
 
+def test_removed_backend_stays_removed():
+    """The list in bundle.py is a fence, so check that the fence is standing.
+
+    REMOVED_QT_MODULES names eight modules deleted in the orphan-code pass. Left
+    unread, it would decay into exactly the kind of constant that lies: a file called
+    window.py could reappear out of git history, the list would still be there looking
+    like it did something, and the payload would carry an untested backend again.
+
+    The second assertion is the important one. A fence test that only checks
+    "nothing in the list is present" passes trivially if the list is emptied, so the
+    list itself has to be non-empty for this to mean anything.
+    """
+    pkg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "glasspad")
+    present = [n for n in bundle.REMOVED_QT_MODULES
+               if os.path.exists(os.path.join(pkg, n))]
+    check(f"none of the deleted Qt modules is back (found {present})", not present)
+    check(f"the fence is not empty ({len(bundle.REMOVED_QT_MODULES)} names)",
+          len(bundle.REMOVED_QT_MODULES) >= 8)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:
