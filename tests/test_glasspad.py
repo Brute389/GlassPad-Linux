@@ -896,8 +896,13 @@ class TestDocPointers:
     SHIPPED = (sorted((ROOT / "glasspad").glob("*.py"))
                + [ROOT / "install.sh", ROOT / "desktop" / "glasspad.desktop.in"])
     # A bare filename resolves relative to the package or the repo root, which
-    # is where install.sh and the license texts actually live.
-    LOOKUP = (ROOT / "glasspad", ROOT / "desktop", ROOT / "licenses", ROOT)
+    # is where install.sh and the license texts actually live. tests/ belongs here
+    # too: shipped comments cite the suite that enforces an invariant ("which is
+    # what test_orphan_constants.py caught"), and a pointer to the check that will
+    # fire is the most useful kind of pointer there is. It should resolve, not be
+    # exempted.
+    LOOKUP = (ROOT / "glasspad", ROOT / "desktop", ROOT / "licenses",
+              ROOT / "tests", ROOT)
     # Written at runtime in the user's config dir, never shipped.
     RUNTIME = {"layout.json"}
     # Removed on purpose, and still cited by name in the code that replaced them:
@@ -1353,4 +1358,23 @@ try:
     from glasspad.bundle import REMOVED_QT_MODULES as _GONE
 except Exception:                                       # noqa: BLE001
     _GONE = ()
-TestDocPointers.HISTORICAL = frozenset(_GONE)
+# Deleted in the lean-folder pass, when the tree was trimmed to what is needed to
+# build and install the AppImage. Prose in glasspad/*.py still cites them as the
+# origin of measurements -- render_style.py is where the pressed-button bevel was
+# derived, resize_probe.py where the grip-zone size was measured -- and a
+# provenance comment that names a file which no longer exists is a truer record
+# than one edited to pretend the measurement came from nowhere. Citable, not
+# resolvable: exactly the distinction the Qt modules above established.
+TRIMMED_TOOLS = frozenset({
+    "hit_test.py", "layer_probe.py", "layer_probe.qml", "pad_probe.py",
+    "render_dpad.py", "render_resize_previews.py", "render_stick_curve.py",
+    "render_style.py", "resize_probe.py", "verify_screen.py",
+    # kept: uinput_watch.py and probe_real_pad.py, because this file tests them.
+    # Dropping them would have dropped the only checks that a pad is real and
+    # that no virtual device leaks behind the suite -- coverage, not clutter.
+})
+# Dropped as documentation-adjacent bulk; tests/test_glasspad.py still mentions it
+# in a comment about where to bump the version alongside.
+TRIMMED_DOCS = frozenset({"CHANGELOG.md"})
+
+TestDocPointers.HISTORICAL = frozenset(_GONE) | TRIMMED_TOOLS | TRIMMED_DOCS

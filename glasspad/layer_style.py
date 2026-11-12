@@ -150,9 +150,10 @@ PANEL_MIN_WIDTH = 260.0
 PILLBTN_RADIUS = 8.0
 PILLBTN_FONT = 12.0
 BTN_W, BTN_H = 106.0, 30.0
-BTN_ACTIVE = "#CC208060"
-BTN_INACTIVE = "#80406090"
-BTN_RESET = "#CC804020"
+# BTN_ACTIVE / BTN_INACTIVE / BTN_RESET went with tools/render_style.py in the
+# lean-folder pass. They were the Windows pill-button fills, and the overlay has
+# never painted a pill with them -- the renderer was their only reader, which is
+# what test_orphan_constants.py caught the moment the renderer left.
 
 # -- font fallback note ---------------------------------------------------
 # The client asks for Segoe UI, which is not present on Linux; fontconfig maps it

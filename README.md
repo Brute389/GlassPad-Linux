@@ -5,8 +5,10 @@ Touchscreen → virtual Xbox 360 gamepad overlay for Linux, ported from GlassPad
 game and forwards touches to a kernel `uinput` device that identifies itself as
 a wired Microsoft 360 pad, so anything that accepts a controller accepts it.
 
-**Current version: 1.1.0** (Linux port) — see
-[CHANGELOG.md](CHANGELOG.md). `glasspad --version` and the About box
+**Current version: 1.1.0** (Linux port). The reasoning behind each change is in
+`git log`, not a changelog file — the history carries the *why* alongside the diff,
+and keeping a second copy in sync is a chore that goes stale within a release.
+`glasspad --version` and the About box
 report the same number, and `test_version_strings_agree()` fails if they
 ever stop. The Windows original stays 1.0.2; the docstrings naming it are
 provenance, not this version.
@@ -39,7 +41,7 @@ here unchanged.
   any in-flight exception — teardown belongs after the `try`/`except` chain so
   the handlers set a return code.
 * Linux with the `uinput` module, writable to your user (the installer enables both)
-* Optional: `python-evdev` for reading the virtual pad back (`tools/pad_probe.py`).
+* Optional: `python-evdev` for reading the virtual pad back (`tools/probe_real_pad.py`).
 
 `PyQt6` used to be the first line of this list. The Qt/X11 backend it powered is gone —
 it was a second GUI toolkit, a third of the package bytes, and nothing inside a shipped
@@ -408,14 +410,21 @@ What works instead:
 | `tools/probe_real_pad.py` | Creates the **real** pad and reads identity, `PRODUCT` and every axis range back out of the kernel, then destroys it and verifies nothing was left. Needs a writable `/dev/uinput`. |
 | `tools/uinput_watch.py` | Snapshots kernel input devices and reports any pad a test leaked. `run -- <cmd>` wraps the suite so nothing hides between steps. |
 | `tools/run_tests.py` | Runs the pytest-style suite with no pytest installed, including the uinput-safety legs. `check_all.py` calls it; you rarely need to. |
-| `tools/run_tests.py` | The suite with no pytest. |
 | `tools/check_all.py` | Every suite plus the live self-test; exit status is real, and a suite that cannot start counts as failing. |
-| `tools/render_stick_curve.py` | The stick response as **millimetres of thumb travel**, per preset. |
 | `tools/make_bundle.py` | Build **and run** the single-file `.run` bundle; refuses to call it done until the artefact has executed cleanly. |
 | `tools/make_appimage.sh` | Stage the AppDir (validated desktop entry, `AppRun`), run it, then pack if the tooling exists — and say plainly what is missing when it does not. |
 | `tools/glasspad-profile` | Claim a profile for the overlay (`--seed`, `--list`, `--status`, `--clear`). Exits 0 unless the *arguments* were wrong — a launcher must never fail because of the overlay. |
-| `tools/render_style.py`, `tools/render_dpad.py`, `tools/render_press_previews.py` | Offscreen renders of the painters, with numerical checks — the reliable half of visual verification. |
-| `tools/pad_probe.py`, `tools/hit_test.py`, `tools/layer_probe.py` | What the kernel receives, which surface took a tap, and whether a layer surface survives at all. |
+| `tools/mk_appimage_offline.py` | Pack a staged AppDir into a real type-2 `.AppImage` with a borrowed `mksquashfs` and runtime, checking the payload offset and the packed md5. |
+
+Also here, and deliberately: the tree holds only what is needed to build, install
+and verify. The measurement tools that derived this spec — `render_style.py` and
+`render_dpad.py` (offscreen renders with numerical checks), `resize_probe.py`
+(whether a mapped layer surface can resize in place), `hit_test.py`, `pad_probe.py`,
+`layer_probe.py`, `verify_screen.py`, `render_stick_curve.py` — were trimmed out.
+Prose in `glasspad/*.py` still names them as the origin of specific numbers, and
+`test_no_dangling_file_references` treats them as citable-but-unresolvable for that
+reason. All of them are in `git log` if a control ever needs re-measuring on real
+hardware.
 
 A green test suite does **not** prove no pad was created: `PadService` turns
 backend errors into a status line, so a test that reaches the backend passes
@@ -484,7 +493,8 @@ purpose: four knobs on a 75 px button cover a third of its face, and a drag mean
 move would resize instead.
 
 Whether a *mapped* layer surface can change size in place is a compositor question, so
-it was measured before it was built on (`tools/resize_probe.py`): a plain size request
+it was measured before it was built on (by `resize_probe.py`, now trimmed from the
+tree — see `git log`): a plain size request
 works under KWin — no unmap, no replacement surface.
 
 ## Holding, and what happens when nobody tells us to release
@@ -614,8 +624,11 @@ Three dials sit on top, and presets for people who cannot feel a saturation frac
 ```bash
 python3 -m glasspad --stick-preset crisp
 python3 -m glasspad --stick-sat 0.6 --stick-dead 0.05 --stick-curve 0.8
-python3 tools/render_stick_curve.py        # the table below, in millimetres
 ```
+
+The table below is that curve expressed in millimetres of thumb travel; it was
+computed by a renderer that has since been trimmed from the tree, and `git log`
+still has it.
 
 ```
                                   thumb travel for deflection of
@@ -861,11 +874,15 @@ three things apart that a casual notice tends to blur:
 * **shipped inside the AppImage** — the type-2 runtime, plus an honest note that the
   offline build borrows a runtime and a `mksquashfs` from the build machine.
 
-`licenses/windows-original/` keeps HIDMaestro's licence and its notices for usbip-win2
-and DsHidMini. None of it is part of this build — the port creates its device through
-the kernel's `uinput` — and it ships in neither artefact. The rule is enforced rather
-than asserted: nothing Windows-only may appear above the notices file's *Not part of
-this build* heading, which is checked from inside each packed artefact.
+HIDMaestro's licence and its notices for usbip-win2 and DsHidMini used to sit in
+`licenses/windows-original/`. None of it is part of this build — the port creates
+its device through the kernel's `uinput`, links none of that code, and ships none of
+it in either artefact — so the directory was trimmed with the rest of the
+non-essential material. It is in `git log` if the Windows original ever needs
+rebuilt. What *is* load-bearing stays enforced rather than asserted: the MIT notice
+and `licenses/THIRD-PARTY-NOTICES.txt` are conditions of shipping, both builders
+abort if either is missing, and nothing Windows-only may appear above the notices
+file's *Not part of this build* heading — checked from inside each packed artefact.
 
 **In the app**, the About box's `Open-source licenses` pill opens a scrollable reader
 showing both documents inside the overlay. It deliberately does not launch a text

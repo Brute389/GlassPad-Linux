@@ -45,6 +45,21 @@ done
 version=$(python3 -c 'import sys; sys.path.insert(0,"."); import glasspad; print(glasspad.__version__)')
 dist="$root/dist"
 appdir="$dist/GlassPad.AppDir"
+
+cleanup_staging() {
+  # The artefact is the deliverable. The AppDir, the borrowed runtime and the
+  # intermediate squashfs are scratch, and they used to be left sitting next to it
+  # -- 1.5 MB of "which part of dist/ is necessary?" for anyone who looked, which
+  # is the exact question this folder is supposed to answer. Never called on a
+  # failed pack: there the AppDir is the thing you carry to a machine that has
+  # appimagetool, and the instructions above depend on it.
+  if [ "${GLASSPAD_KEEP_STAGING:-0}" = 1 ]; then
+    echo "    keeping the AppDir and scratch (GLASSPAD_KEEP_STAGING=1)"
+    return
+  fi
+  rm -rf "$appdir" "$dist/payload.sqsh" "$dist/runtime-borrowed"
+  echo "    staging cleaned; GLASSPAD_KEEP_STAGING=1 keeps it for inspection"
+}
 arch=$(uname -m)
 
 if [ "$run_tests" = 1 ]; then
@@ -210,6 +225,7 @@ if [ "${GLASSPAD_NO_BORROW:-0}" != "1" ] && ! command -v appimagetool >/dev/null
   if python3 "$root/tools/mk_appimage_offline.py"; then
     echo "    (the runtime and mksquashfs were borrowed -- see the lines above;"
     echo "     install squashfs-tools + appimagetool to stop depending on that)"
+    cleanup_staging
     exit 0
   fi
   echo "    offline route failed; falling back to instructions" >&2
@@ -217,7 +233,7 @@ fi
 
 if command -v appimagetool >/dev/null 2>&1; then
   out="GlassPad-$version-$arch.AppImage"
-  appimagetool "$appdir" "$dist/$out" && { echo "    wrote dist/$out"; exit 0; }
+  appimagetool "$appdir" "$dist/$out" && { echo "    wrote dist/$out"; cleanup_staging; exit 0; }
   echo "    appimagetool failed" >&2; exit 1
 fi
 

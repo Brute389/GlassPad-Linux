@@ -84,11 +84,14 @@ hardcoding a fallback would be wrong on a machine that does have Segoe UI.
 6. Not part of this build
 -------------------------
 
-HIDMaestro, usbip-win2 and DsHidMini appear under licenses/windows-original/ and
-are shipped in neither artefact. They belong to the Windows original's transport:
-HIDMaestro presents a real USB device through a Windows kernel driver, and
-usbip-win2 and DsHidMini are its dependencies and report-descriptor reference.
+HIDMaestro, usbip-win2 and DsHidMini are shipped in neither artefact. They belong
+to the Windows original's transport: HIDMaestro presents a real USB device through
+a Windows kernel driver, and usbip-win2 and DsHidMini are its dependencies and
+report-descriptor reference.
 
 This port creates its device through the Linux kernel's uinput interface and links
-none of that code. The files are kept in the repository so the original's notices
-are not lost, not because anything here requires them.
+none of that code. Their licence texts were held under licenses/windows-original/
+and were removed when the repository was trimmed to what this build needs; they
+stay recoverable from the project's git history. Nothing here requires them, and
+nothing here uses them -- this section exists so that a reader who knows the
+Windows original is not left wondering where its notices went.
