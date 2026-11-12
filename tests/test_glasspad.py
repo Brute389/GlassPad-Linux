@@ -1275,6 +1275,35 @@ class TestRealPadProbe:
         assert "Lid Switch" not in out         # only our stanza may be printed
 
 
+def test_about_box_credits_the_upstream_it_ports():
+    """The credit line is the one place the port diverges from the client on purpose.
+
+    Recorded as a test because it is a choice about attribution, not a styling detail,
+    and "just restore parity with the original" is the kind of well-meaning edit that
+    would quietly put someone else's name on this build. If this fails, it should be
+    because someone decided to change the wording -- in which case they are changing a
+    credit, and should say so in the commit message.
+    """
+    import glasspad
+    import pathlib
+
+    hub = pathlib.Path(glasspad.__file__).with_name("overlay_layer.py").read_text()
+    assert '"Linux port of:"' in hub, "the port no longer says what it is"
+    assert "github.com/dansunmi/GlassPad" in hub, (
+        "and no longer names the project it ports -- the line above points at nothing")
+    # Checked on the caption call, not the whole file: prose is allowed to *discuss*
+    # the old wording -- the method this replaces is explained by quoting it. What must
+    # not come back is the line being drawn.
+    assert '_caption("by Dansunmi"' not in hub, (
+        "the client's own authorship line is being rendered again, on a build that is "
+        "not the client")
+    # the MIT notice is what actually carries the upstream copyright, so it had better
+    # exist next to the code that cites it
+    lic = pathlib.Path(glasspad.__file__).resolve().parent.parent / "LICENSE"
+    assert lic.is_file() and "MIT" in lic.read_text(), (
+        "the About box leans on LICENSE for attribution and there is no LICENSE")
+
+
 def test_version_strings_agree():
     """One release, one version number, wherever it is read from.
 

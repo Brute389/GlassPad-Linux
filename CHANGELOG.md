@@ -4,6 +4,21 @@ Version numbers here belong to the **Linux port**. The Windows original stays
 1.0.2 forever, and docstrings throughout the tree that say "ported from GlassPad
 1.0.2" name that source release — they are provenance, not this version, and do
 not move on a bump. `test_version_strings_agree()` pins the distinction.
+## Unreleased — About box credits what it ports
+
+The About box said "by Dansunmi", copying the client's own credit line onto a build that
+is not the client. It now reads `Linux port of:` above `github.com/dansunmi/GlassPad` —
+the author's name is still on screen, in the URL, and in the MIT notice shipped as
+`LICENSE`. Guarded by a test, because this is a decision about attribution rather than
+styling, and "restore parity with the original" is how it would silently come back.
+
+The "Open-source licenses" pill still does nothing, and is now documented as broken in
+`_open_licenses()`: `Gtk.UriLauncher.launch()` is async and is called without a callback,
+so the failure is discarded while the status line prints the path as if it had worked. No
+handler for the `file://` scheme exists here regardless, and neither bundle carries
+`licenses/` -- so the plural in the label was never satisfiable in a shipped artefact.
+The replacement is an open decision, not an edit.
+
 ## Unreleased — dead spec constants deleted, one number corrected
 
 Seventeen unreferenced constants removed from `layer_style.py`. They were not spare

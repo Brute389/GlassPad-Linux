@@ -1945,7 +1945,15 @@ class Overlay:
         self._update_dpad_buttons()
 
     def _build_info_panel(self) -> None:
-        """The About box \u2014 same lines, colours and order as window.py's."""
+        """The About box.
+
+        Colours, sizes and order still follow the client. The credit line does not, and
+        that is the one deliberate divergence here: the original says "by Dansunmi", and
+        putting that sentence on a build that behaves differently in a dozen small ways
+        would credit the wrong person for this code while misdescribing that one. This
+        says what it is and points at what it ports; the author's name is still on
+        screen, in the URL, and in the MIT notice shipped as LICENSE.
+        """
         backend = getattr(self.service, "_backend", None)
         pad_state = f"pad backend: {type(backend).__name__}" if backend else \
             "no pad backend (null pad)"
@@ -1958,7 +1966,8 @@ class Overlay:
 
         box.append(self._caption("GlassPad", "title"))
         box.append(self._caption("Touchscreen \u2192 Gamepad Overlay", "sub"))
-        box.append(self._caption("by Dansunmi", "author"))
+        # Was the client's "by Dansunmi". A port names what it ports instead.
+        box.append(self._caption("Linux port of:", "author"))
         box.append(self._caption("github.com/dansunmi/GlassPad", "url"))
         # window.py prints BACKEND_LABEL because the Linux pad is created by the
         # kernel's uinput rather than by the HIDMaestro SDK the original cites.
@@ -2012,11 +2021,29 @@ class Overlay:
         self._close_fab()
 
     def _open_licenses(self) -> None:
-        """The original opens a LicenseWindow; there is no window to open here.
+        """KNOWN BROKEN -- and the way it is broken is the interesting part.
 
-        A layer surface cannot host a scrollable document the way a normal window
-        can, so this hands LICENSE to the desktop's default handler and says so in
-        the panel's status line rather than silently doing nothing.
+        The original opens a LicenseWindow. This hands LICENSE to the desktop's
+        default handler, which does not work, and then reports that it did:
+
+          * ``Gtk.UriLauncher.launch()`` is asynchronous. Called with no callback,
+            PyGObject starts it and throws the result away, so the ``except`` below
+            can never fire and the status line is set to the path unconditionally.
+            Measured: returns ``None``, raises nothing, opens nothing.
+          * There is no handler for the ``file://`` scheme here anyway --
+            ``Gio.AppInfo.get_default_for_uri_scheme("file")`` returns ``None``,
+            even though ``text/plain`` resolves to Kate. A path is not a URI scheme.
+          * The bundles ship ``LICENSE`` but not ``licenses/``, so the plural in the
+            button's label -- and THIRD-PARTY-NOTICES.txt, the only one of those three
+            that mentions anything this build actually uses -- is unfulfillable in a
+            shipped artefact. HIDMaestro-LICENSE.txt describes the Windows original's
+            SDK, which this port does not have.
+
+        Left working-as-broken deliberately pending a decision on the replacement
+        (in-app scrollable text vs. a real https launch), because a half-fix here would
+        still leave the button promising something the payload cannot deliver. Fixing
+        the async call without fixing the payload just makes the failure report honestly
+        instead of lying.
         """
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         for name in ("LICENSE", "LICENSE.txt", "LICENSE.md"):
