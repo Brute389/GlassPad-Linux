@@ -55,7 +55,37 @@ newgrp input               # or log out and back in — group membership is need
 ```
 
 Other modes: `--user` (desktop entry + icons into `~/.local`, no root, no `/etc`
-writes), `--autostart`, `--dry-run`, `--uninstall`.
+writes), `--autostart`, `--dry-run`, `--uninstall`, and `--uinput`, which does the
+privileged half alone — that is the mode a bundle runs.
+
+### First run on a machine that has never had GlassPad
+
+A download is not executable, and a fresh machine will not let you create a
+virtual gamepad. Neither is a bug and both are one-time:
+
+```bash
+chmod +x GlassPad-1.1.0-x86_64.AppImage
+./GlassPad-1.1.0-x86_64.AppImage --status            # read this first
+./GlassPad-1.1.0-x86_64.AppImage --install-uinput    # one password, once
+./GlassPad-1.1.0-x86_64.AppImage
+```
+
+`--install-uinput` loads the `uinput` module at boot, installs the udev rule, and
+adds your account to `input`. The rule it writes is
+[`packaging/glasspad-udev.rules`](packaging/glasspad-udev.rules), copied verbatim —
+it is a separate file so you can read it and so `udevadm verify` can check it, and
+`install.sh` refuses to run without it rather than falling back to a copy of its
+own. Add `--dry-run` to see the plan with no password at all.
+
+If that command says the group was newly added, it takes effect at the **next
+login**: a process keeps the groups it was started with, and no amount of
+`udevadm trigger` changes that.
+
+Until the permission exists the overlay still appears and every control still
+lights up under your finger, and not one press reaches the game. That is now said
+out loud — once on stderr, and as `NO PAD` on the overlay itself — because a pad
+that silently does nothing is indistinguishable from an overlay that is broken,
+which is what a fresh install used to look like.
 
 Note that `PREFIX` relocates **only** the desktop entry and icons. The module
 config and udev rule are absolute `/etc` paths and ignore `PREFIX`, so
@@ -143,7 +173,7 @@ Three things decide whether this app works, and a payload cannot carry any of th
 | --- | --- |
 | **libgtk4-layer-shell** | Bundleable in principle. Wrong in practice: the copy must match the host's `libwayland` *and* GTK 4, and when it does not you get a blank overlay rather than an error. So `glasspad/bundle.py` **finds** it instead — the bundle's own `lib/` first, then `ld.so`, then Arch, Fedora and Debian-multiarch paths — and says which rule matched. `GLASSPAD_LAYER_SHELL=/path` overrides. |
 | **A compositor with `zwlr_layer_shell_v1`** | KWin, Hyprland, Sway, wlroots: yes. Stock GNOME: no. No packaging format supplies this, which is why a Flatpak of this app would be worse, not better: the sandbox filters layer-shell off the session bus *and* denies `/dev/uinput`. |
-| **Write access to `/dev/uinput`** | A permission, not a library. AppImage sandboxes nothing, so this is the same question as running from a checkout — but it is the one thing that fails on a machine that has never had GlassPad, so `--status` says it out loud. |
+| **Write access to `/dev/uinput`** | A permission, not a library. AppImage sandboxes nothing, so this is the same question as running from a checkout — but it is the one thing that fails on a machine that has never had GlassPad — so `--status` says it out loud, and **`--install-uinput` fixes it**: both artefacts ship `install.sh` and the udev rule, and escalate through `pkexec` once. A bundle cannot carry `/etc/udev/rules.d`; a udev rule inside a squashfs image is not a rule. What it can carry is the means. |
 
 One finding from building this, since it bites anything that asks the question:
 

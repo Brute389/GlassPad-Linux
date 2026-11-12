@@ -4,6 +4,62 @@ Version numbers here belong to the **Linux port**. The Windows original stays
 1.0.2 forever, and docstrings throughout the tree that say "ported from GlassPad
 1.0.2" name that source release — they are provenance, not this version, and do
 not move on a bump. `test_version_strings_agree()` pins the distinction.
+## Unreleased — a downloaded bundle can finish its own install
+
+Uninstalled everything and ran the AppImage the way a stranger would: download,
+`chmod +x`, run. Four things came out of it, one of them serious.
+
+**The serious one: a fresh machine gets a pad that silently does nothing.** With
+`/dev/uinput` unwritable — the state of every Linux machine that has never had
+GlassPad — `PadService` chose `NullBackend()` in silence. The overlay mapped 20
+surfaces, the controls drew and lit up under a finger, and **the self-test passed**,
+because a null backend records its own events. Zero bytes of output in seven
+seconds. A pad that conveys nothing is indistinguishable from an overlay that is
+broken, and that was the whole first-run experience. Now: `PadService.fell_back_to_null`
+is set only when the fallback was *not* requested (`--null-pad` stays quiet), which
+prints `NO_UINPUT_HINT` once on stderr and puts `NO PAD … run: glasspad
+--install-uinput` on the overlay itself.
+
+**So the bundle now carries the fix.** An AppImage cannot contain
+`/etc/udev/rules.d` — writing nothing outside itself is the premise of the format,
+and a rule inside a squashfs image is not a rule — but it can carry the rule and
+the script that installs it. Added `glasspad --install-uinput`, which escalates once
+through `pkexec` and runs `install.sh --uinput`, and both packers now ship
+`install.sh` plus `packaging/glasspad-udev.rules` and refuse to build without them.
+Verified from inside each artefact: the dry run resolves
+`/tmp/.mount_*/usr/share/glasspad/packaging/glasspad-udev.rules` and offers to copy
+it to `/etc`, changing nothing.
+
+- `packaging/glasspad-udev.rules` is now the only statement of the policy. It used
+  to live in a heredoc inside `install.sh`; a second copy in a script is how a
+  machine ends up running the version nobody reviewed, so `install.sh` copies the
+  file or refuses, and the file passes `udevadm verify`.
+- `install.sh --uinput` is the privileged half alone, safe to `--dry-run`
+  unprivileged. Its final verdict asks the *account*, not root — via `su` —
+  because root can always write the node and a root-side check reports success on a
+  machine where the person who just authenticated still cannot make a pad.
+- `TARGET_USER` now honours `PKEXEC_UID`. `pkexec` documents only that variable and
+  resets the rest of the environment to root, so without it the installer adds root
+  to `input` — which already has it — and leaves the actual user locked out
+  while reporting a successful install.
+- `--install-uinput --dry-run` exists because of how this feature was written: a
+  probe of the refusal path pointed `$GLASSPAD_INSTALLER_DIR` at an empty directory,
+  the resolver correctly fell through to the checkout, and the real installer ran
+  through `pkexec`. Correct behaviour, live change to `/etc`, and no safe way to
+  rehearse. A dry run elevates nothing at all.
+- `install.sh --help` printed a fixed line range, so the four new header lines fell
+  off the end; it now prints the header block whatever its length. Caught by
+  `test_installer_still_parses_and_documents_itself`, which exists for exactly this.
+- `--status` no longer advises "add yourself to the group that owns it": it names
+  the command. The first line of output is also no longer a `PyGIWarning` about a
+  missing `gi.require_version("Gdk", "4.0")`.
+
+`tests/test_uinput_installer.py` (13) pins the rule contents (0660/group input, one
+active line, never 0666 — a virtual pad is a keystroke injector as far as the
+desktop is concerned), the refusal when the rule file is missing, exit 2 with no
+traceback when the bundle ships no installer, that a dry run invokes `sh` and a real
+run invokes `pkexec`, `PKEXEC_UID` resolution, and that an explicitly requested null
+pad prints nothing. 22/22 suites green.
 ## Unreleased — the licence is readable, and says what this build is
 
 The `Open-source licenses` pill reported success and opened nothing. It now opens a

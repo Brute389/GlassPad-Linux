@@ -2982,6 +2982,12 @@ def main(argv: list[str] | None = None) -> int:
     ov = Overlay(service, min(1.0, max(0.05, opacity)), edit=args.edit,
                  layout_path=path, dpad_mode=dpad_mode, hold_limit=args.hold_limit)
     ov.trace = args.trace or bool(os.environ.get("GLASSPAD_TRACE"))
+    if service.fell_back_to_null:
+        # pad.py has already shouted about this on stderr, which is the right
+        # place when something launched GlassPad from a terminal. This is the
+        # place that matters when it came from a desktop icon: nothing else on
+        # screen will ever look wrong.
+        ov._say("NO PAD: /dev/uinput not writable -- run:  glasspad --install-uinput")
     ov.stick_anchor = args.stick_anchor
     ov.edge_margin = edge_clamp(args.edge_margin)
     tuning, warn = stick_preset(args.stick_preset) if args.stick_preset \

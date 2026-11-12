@@ -7,6 +7,10 @@
 #   ./install.sh --autostart    also start the overlay at login (per user)
 #   ./install.sh --dry-run      show what would be done
 #   ./install.sh --check        report current state, change nothing
+#   ./install.sh --uinput       the privileged half only: module, udev rule,
+#                               group membership. This is what a bundle runs
+#                               (`glasspad --install-uinput`), since it cannot
+#                               carry /etc/udev/rules.d inside itself.
 #   ./install.sh --uninstall    undo everything, from both install roots
 #
 # --uninstall is deliberately broader than the mode you installed with: it clears
@@ -32,6 +36,10 @@ PREFIX="${PREFIX:-/usr/local}"
 SRC=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 MODULES_CONF=/etc/modules-load.d/uinput.conf
 UDEV_RULE=/etc/udev/rules.d/99-glasspad-uinput.rules
+# The rule lives in its own file, not in a heredoc here, so it can be read and
+# checked on its own (`udevadm verify`) and so the tree holds exactly one copy
+# of the policy.
+UDEV_RULE_SRC="$SRC/packaging/glasspad-udev.rules"
 
 say() { printf '%s\n' "$*"; }
 run() {
@@ -52,7 +60,16 @@ run() {
 # as a complete uninstall and is not one. SUDO_USER names the person who typed
 # the command; that is whose desktop is being changed.
 # Defined before the argument loop because --user resolves PREFIX through it.
-TARGET_USER=${SUDO_USER:-$(id -un)}
+TARGET_USER=${SUDO_USER:-}
+if [ -z "$TARGET_USER" ] && [ -n "${PKEXEC_UID:-}" ]; then
+    # pkexec documents exactly one variable for this -- PKEXEC_UID, the uid of
+    # whoever answered the prompt -- and resets the rest of the environment to
+    # the admin account, so $USER reads "root". The bundle path goes through
+    # pkexec; without this it would add root to `input` and leave the person
+    # who just installed GlassPad still locked out of their own pad.
+    TARGET_USER=$(getent passwd "$PKEXEC_UID" 2>/dev/null | cut -d: -f1)
+fi
+TARGET_USER=${TARGET_USER:-$(id -un)}
 target_home() {
     home=$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)
     if [ -n "$home" ]; then
@@ -95,8 +112,15 @@ for arg in "$@"; do
         # /root/.local, where no desktop would ever look.
         --user)      USER_ONLY=1; PREFIX="$(target_home)/.local" ;;
         --autostart) AUTOSTART=1 ;;
+        --uinput)    MODE=uinput ;;
         --uninstall) MODE=uninstall ;;
-        -h|--help)   sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)   # Print the whole header block, however long it is. A fixed
+                     # line range silently truncates --help by one option every
+                     # time somebody adds one, which is a bug that ships as
+                     # documentation; test_installer_still_parses_and_documents_itself
+                     # is what keeps the two ends of this file in agreement.
+                     awk 'NR==1 {next} /^#/ {sub(/^# ?/, ""); print; next} {exit}' "$0"
+                     exit 0 ;;
         *) say "unknown option: $arg"; exit 2 ;;
     esac
 done
@@ -215,14 +239,18 @@ install_udev_rule() {
     # virtual Xbox pad is a keystroke-injecting device as far as the desktop is
     # concerned. Being in `input` is therefore still required -- see below.
     say "udev rule"
+    if [ ! -f "$UDEV_RULE_SRC" ]; then
+        say "  ERROR: rule file not found: $UDEV_RULE_SRC"
+        say "  This script will not fall back to an embedded copy: two versions"
+        say "  of a permission policy is how a machine ends up running the one"
+        say "  nobody reviewed. Restore packaging/glasspad-udev.rules."
+        return 1
+    fi
     if [ "$DRY" = 1 ]; then
-        say "  would write: $UDEV_RULE"
+        say "  would copy $UDEV_RULE_SRC -> $UDEV_RULE"
         return
     fi
-    cat > "$UDEV_RULE" <<'RULE'
-# GlassPad: allow members of the input group to create virtual gamepads.
-KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"
-RULE
+    cat "$UDEV_RULE_SRC" > "$UDEV_RULE"
     say "  wrote $UDEV_RULE"
     if command -v udevadm >/dev/null 2>&1; then
         run udevadm control --reload-rules
@@ -420,6 +448,46 @@ case "$MODE" in
         ;;
     uninstall)
         uninstall
+        ;;
+    uinput)
+        # The privileged half on its own. A bundle cannot carry
+        # /etc/udev/rules.d inside itself, but it can carry this script plus
+        # the rule file, which is what lets `glasspad --install-uinput` finish
+        # an install from a lone download with no checkout on the machine.
+        if [ "$DRY" != 1 ]; then
+            need_root
+        fi
+        say "uinput access for $TARGET_USER"
+        enable_module
+        if ! install_udev_rule; then
+            say ""
+            say "FAILED: no udev rule was installed, so nothing about"
+            say "permissions changed and GlassPad still cannot create a pad."
+            exit 1
+        fi
+        add_user_to_input_group
+        say ""
+        if [ "$DRY" = 1 ]; then
+            say "  dry run: nothing changed"
+        elif [ ! -e /dev/uinput ]; then
+            say "  /dev/uinput still does not exist: the module did not load."
+            say "  Check with:  sudo modprobe uinput"
+            exit 1
+        else
+            # Root can always write the node, so asking root proves nothing.
+            # Ask the account that will actually run GlassPad.
+            as_user=$(su -s /bin/sh "$TARGET_USER" -c 'test -w /dev/uinput && echo yes || echo no' 2>/dev/null || echo unknown)
+            perms=$(ls -l /dev/uinput | awk '{print $1" "$3":"$4}')
+            say "  /dev/uinput : $perms"
+            if [ "$as_user" = yes ]; then
+                say "  writable by $TARGET_USER: GlassPad can create a pad now."
+            else
+                say "  NOT yet writable by $TARGET_USER."
+                say "  The rule is installed; if this run added the group it only"
+                say "  applies to a NEW login. Log out and back in, then confirm:"
+                say "      glasspad --status"
+            fi
+        fi
         ;;
     install)
         if [ "$USER_ONLY" = 1 ]; then

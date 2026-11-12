@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import errno
 import os
+import sys
 import threading
 from typing import Callable, Iterable
 
@@ -185,6 +186,36 @@ def uinput_available(path: str = "/dev/uinput") -> bool:
     return os.access(path, os.W_OK)
 
 
+#: The state this program must never reach quietly: controls that draw, animate
+#: and light up under a finger while every press disappears into a rehearsal
+#: dummy. On screen the overlay is indistinguishable from a working one.
+NO_UINPUT_HINT = """GlassPad cannot write /dev/uinput, so there is no gamepad.
+
+The overlay still appears and the controls still respond -- to you. Nothing is
+sent anywhere, because the device that would carry it belongs to root and this
+account was never given permission to create one. This is not a bug to work
+around; it is one command, once, and it asks for a password:
+
+    glasspad --install-uinput
+
+Then log out and back in if that command says the group was newly added, and
+confirm with:  glasspad --status
+"""
+
+
+def _warn_no_uinput() -> None:
+    # Once per process: this fires from the pad's own thread and a repeating
+    # block in a scrollback is a block nobody reads past the first line.
+    global _NO_UINPUT_WARNED
+    if _NO_UINPUT_WARNED:
+        return
+    _NO_UINPUT_WARNED = True
+    print(NO_UINPUT_HINT, file=sys.stderr, end="")
+
+
+_NO_UINPUT_WARNED = False
+
+
 class PadService:
     """Port of GlassPad.Input.PadService.
 
@@ -202,6 +233,9 @@ class PadService:
         self._backend: PadBackend | None = backend
         self._started = False
         self._disposed = False
+        #: True when init() had to fall back to a null pad on its own. The
+        #: overlay shows this on screen; see NO_UINPUT_HINT.
+        self.fell_back_to_null = False
 
         self._buttons: set[str] = set()
         self._hat = "None"
@@ -235,6 +269,13 @@ class PadService:
                 probe = intended or (
                     UinputBackend() if uinput_available() else NullBackend()
                 )
+                if intended is None and isinstance(probe, NullBackend):
+                    # `intended is None` is what separates "the user asked for a
+                    # rehearsal pad with --null-pad" from "the kernel said no".
+                    # The first is fine and silent; the second has to be said
+                    # out loud, because nothing else about the app will look wrong.
+                    self.fell_back_to_null = True
+                    _warn_no_uinput()
                 with self._lock:
                     if self._disposed:
                         raise _Abandoned()

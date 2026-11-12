@@ -200,3 +200,59 @@ def read_doc(name: str) -> tuple[str, str | None]:
     if not body:
         return "", f"{name}: {path} is empty"
     return f"{path}\n{'-' * 72}\n{body}\n", None
+
+
+# ---------------------------------------------------------------------------
+# The privileged installer
+# ---------------------------------------------------------------------------
+# A bundle cannot carry /etc/udev/rules.d: writing nothing outside itself is the
+# premise of the format, and a udev rule inside a squashfs image is not a rule.
+# What it CAN carry is the rule file and the script that installs it, which is
+# what turns "download one file" into a complete install. These resolvers are the
+# only place that knows where those two landed, and --status uses them too so the
+# two can never disagree about what is installed.
+#
+# Same three layouts as doc_roots(), because they are the same two files moving
+# to the same three places:
+#
+#     checkout    <repo>/glasspad/bundle.py      -> <repo>/install.sh
+#     .run        app/glasspad/bundle.py         -> app/install.sh
+#     AppImage    usr/share/glasspad/glasspad/   -> usr/share/glasspad/install.sh
+
+INSTALLER_ROOT_ENV = "GLASSPAD_INSTALLER_DIR"
+INSTALLER_NAME = "install.sh"
+RULE_REL = os.path.join("packaging", "glasspad-udev.rules")
+
+
+def installer_roots() -> list[str]:
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(here)
+    out: list[str] = []
+    env = os.environ.get(INSTALLER_ROOT_ENV, "").strip()
+    if env:
+        out.append(env)
+    out.extend((root, os.getcwd()))
+    seen, uniq = set(), []
+    for c in out:
+        c = os.path.normpath(c)
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    return uniq
+
+
+def find_installer() -> str | None:
+    """Path to install.sh, or None when this bundle did not ship one."""
+    for root in installer_roots():
+        cand = os.path.join(root, INSTALLER_NAME)
+        if os.path.isfile(cand) and os.access(cand, os.R_OK):
+            return cand
+    return None
+
+
+def installer_rule_src(installer: str | None) -> str | None:
+    """The rule file that installer copies, or None when it is not alongside."""
+    if not installer:
+        return None
+    cand = os.path.join(os.path.dirname(os.path.abspath(installer)), RULE_REL)
+    return cand if os.path.isfile(cand) else None

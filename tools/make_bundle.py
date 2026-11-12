@@ -188,7 +188,16 @@ def sources() -> list[tuple[str, str]]:
     # notice must accompany the copy, and the About box renders both files. Skipping a
     # missing extra silently is how a release goes out with no licence attached and
     # nobody finds out until somebody asks for one, so these abort the build.
-    required = ("README.md", "LICENSE", os.path.join("licenses", "THIRD-PARTY-NOTICES.txt"))
+    required = ("README.md", "LICENSE", os.path.join("licenses", "THIRD-PARTY-NOTICES.txt"),
+                # The privileged half of the install travels inside the bundle. An
+                # AppImage or .run cannot carry /etc/udev/rules.d -- writing nothing
+                # outside itself is the premise of the format -- so it carries the
+                # rule and the script that installs it instead, which is what lets
+                # `glasspad --install-uinput` finish an install from one download.
+                # Both are required: an installer with no rule beside it is a build
+                # that refuses at the worst possible moment, on a stranger's machine,
+                # with a message blaming the stranger's download.
+                "install.sh", os.path.join("packaging", "glasspad-udev.rules"))
     for extra in ("tools/glasspad-profile",) + required:
         full = os.path.join(ROOT, extra)
         if os.path.isfile(full):

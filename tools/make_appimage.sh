@@ -95,6 +95,16 @@ for doc in LICENSE licenses/THIRD-PARTY-NOTICES.txt; do
     [ -f "$doc" ] || { echo "  ERROR: $doc is missing; refusing to ship without it" >&2; exit 1; }
     cp "$doc" "$appdir/usr/share/doc/glasspad/$(basename "$doc")"
 done
+# The privileged half of the install, same reasoning as the licence texts above:
+# the bundle cannot ship /etc/udev/rules.d, so it ships the rule and the script
+# that writes it, and `glasspad --install-uinput` runs them through pkexec. On a
+# machine that has never had GlassPad this is the difference between "download one
+# file" and "download one file, then go find a source tree you do not have".
+for priv in install.sh packaging/glasspad-udev.rules; do
+    [ -f "$priv" ] || { echo "  ERROR: $priv is missing; this bundle could not finish an install" >&2; exit 1; }
+    mkdir -p "$appdir/usr/share/glasspad/$(dirname "$priv")"
+    cp "$priv" "$appdir/usr/share/glasspad/$priv"
+done
 cp packaging/glasspad.svg "$appdir/usr/share/icons/hicolor/scalable/apps/glasspad.svg"
 
 cat > "$appdir/GlassPad.desktop" <<'DESKTOP'

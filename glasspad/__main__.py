@@ -8,6 +8,15 @@ removed once the layer-shell backend was the only one shipping, and `bundle.py`
 used to carry a list of modules to leave out of the payloads — a list is how you
 end up shipping a backend nobody tests. The code is in git history (before the
 orphan-code pass); reviving it means adding it back deliberately, not un-hiding it.
+
+Special modes, both of which work with no Wayland session running:
+
+  --status          diagnose the overlay stack and exit (add --json for JSON).
+  --install-uinput  grant /dev/uinput access -- one password, once. Run it the
+                    first time, or any time --status says the device is not
+                    writable. Without that access the controls draw, animate,
+                    and reach no game whatsoever, which is the most confusing
+                    failure this program can have.
 """
 from __future__ import annotations
 
@@ -141,6 +150,7 @@ def report_status() -> int:
         import gi
 
         gi.require_version("Gtk", "4.0")
+        gi.require_version("Gdk", "4.0")
         gi.require_version("Gtk4LayerShell", "1.0")
         from gi.repository import Gdk, Gtk4LayerShell
     except Exception as exc:                                # noqa: BLE001
@@ -197,6 +207,13 @@ def report_status() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     rest = take_backend(sys.argv[1:] if argv is None else list(argv))
+    if "--install-uinput" in rest:
+        # Checked before anything that cares about a session: this is how you fix
+        # the machine so that the session-dependent code has something to report,
+        # and on a fresh install it is the first command a user needs. Letting an
+        # unrecognised flag fall through would start a fullscreen transparent
+        # overlay in answer to a setup request -- see --version below.
+        return install_uinput(rest)
     if rest and rest[0] in ("status", "--status", "-s"):
         return report_status()
     # --version and --help used to belong to the Qt parser. Losing that branch is
@@ -212,7 +229,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if rest and rest[0] in ("--help", "-h"):
         print((__doc__ or "").strip())
-        print(f"\nusage: glasspad [--status] [--edit] [--profile NAME] [--backend {BACKEND}]")
+        print(f"\nusage: glasspad [--status] [--edit] [--profile NAME] "
+              f"[--install-uinput] [--backend {BACKEND}]")
         print("  overlay_layer owns the remaining options; --help there lists them")
         return 0
     from glasspad.overlay_layer import main as run_layer
@@ -220,6 +238,97 @@ def main(argv: list[str] | None = None) -> int:
     if code:
         sys.stderr.write(LAYER_INSTALL_NOTE)
     return code
+
+
+def install_uinput(argv: list[str] = ()) -> int:
+    """Grant /dev/uinput access from inside a bundle, with exactly one prompt.
+
+    This is the one step a bundle cannot sneak past: a virtual gamepad means an
+    entry in /etc/udev/rules.d and membership of a group, and both belong to
+    root. What a bundle CAN do -- and what until now required a source checkout,
+    which nobody who downloaded a single file has -- is carry the rule and the
+    installer that writes it, so that one download is a complete install.
+
+    The check afterwards runs as *ourselves*, never as root: root can always
+    write /dev/uinput, so a root-side verdict reports "writable" on a machine
+    where the person who just typed their password still cannot make a pad.
+    """
+    import shutil
+    import subprocess
+
+    from . import bundle, pad
+
+    installer = bundle.find_installer()
+    if not installer:
+        print("This build ships no installer, so it cannot grant uinput access.")
+        print("Looked for install.sh in:")
+        for root in bundle.installer_roots():
+            print(f"    {root}")
+        print("Every GlassPad .AppImage and .run contains one; if yours does not,")
+        print("the download was truncated.")
+        return 2
+
+    rule = bundle.installer_rule_src(installer)
+    if not rule:
+        print(f"Found the installer at {installer}")
+        print("...but not the rule it installs, expected at:")
+        print(f"    {os.path.join(os.path.dirname(installer), bundle.RULE_REL)}")
+        print("Refusing to invent a permission policy this bundle did not ship.")
+        return 2
+
+    tool = next((t for t in ("pkexec", "sudo") if shutil.which(t)), None)
+    if tool is None:
+        print("Neither pkexec nor sudo is available, so nothing under /etc can be")
+        print("written. Run the installer as root yourself:")
+        print(f"    sh {installer} --uinput")
+        return 2
+
+    print("One password is needed. Everything below belongs to root:")
+    print("    /etc/modules-load.d/uinput.conf    load the uinput module at boot")
+    print("    /etc/udev/rules.d/99-glasspad-...  hand /dev/uinput to group input")
+    print("    group `input`                      your account is added to it")
+    print()
+    print("The exact rule being installed is this file, which you can read first:")
+    print(f"    {rule}")
+    print()
+
+    # --dry-run is not a courtesy: this command writes to /etc through pkexec,
+    # and a mistyped flag should never be able to do that on a first try. It was
+    # written after exactly such a mistake, when a probe of the refusal path ran
+    # the real installer instead -- the resolver searched past the empty override
+    # directory and found a checkout, which is correct behaviour and a live
+    # change to /etc.
+    cmd = [tool, "sh", installer, "--uinput"]
+    dry = "--dry-run" in argv
+    if dry:
+        cmd.append("--dry-run")
+        print("(--dry-run: the installer will report and change nothing)")
+        # No privilege elevation at all for a dry run: install.sh --uinput --dry-run
+        # is safe unprivileged, and asking for a password to read a plan is absurd.
+        cmd.pop(0)
+
+    rc = subprocess.call(cmd)
+    if dry:
+        return rc
+    if rc == 125:
+        print(f"\nAuthorisation declined ({tool} exit 125); nothing was changed.")
+        return 1
+    if rc != 0:
+        print(f"\nThe installer failed with exit {rc}; read its output above.")
+        print("GlassPad never started, so there is no half-configured state to untangle.")
+        return rc
+
+    if pad.uinput_available():
+        print("\n/dev/uinput is writable: GlassPad can create a pad now.")
+        print("Start it again and the controls will actually reach the game.")
+        return 0
+
+    print("\nInstalled -- but /dev/uinput is still not writable *for you*.")
+    print("That is expected when this run added the group: a process keeps the")
+    print("groups it started with, so membership lands at the NEXT login. Log out")
+    print("and back in, then confirm with:")
+    print("    glasspad --status")
+    return 0
 
 
 if __name__ == "__main__":
