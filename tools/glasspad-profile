@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""glasspad-profile -- tell the overlay which layout to use.
+
+    glasspad-profile fighter              # switch to profiles/fighter.json
+    glasspad-profile --list               # what exists
+    glasspad-profile --seed               # create default + fighter from layout.json
+    glasspad-profile --status             # what the overlay was last told
+    glasspad-profile --clear              # forget the claim (overlay keeps its layout)
+
+Steam launch options are the intended user:
+
+    glasspad-profile hollow && %command%
+
+It is a separate command rather than a flag because the thing that knows the game is the
+thing launching it, and because the alternative -- asking the compositor which window is
+in front -- is not available here: KWin 6.8 has no foreign-toplevel-manager, its legacy
+JS scripting API is a silent no-op, and XWayland cannot see a Wayland-native game.
+
+Exit status is 0 unless the *arguments* were wrong. A launcher that refuses to start
+Doom because a gamepad overlay is not running would be the worst possible outcome of a
+convenience feature, so an absent overlay, a missing profile and an unwritable config
+directory are all reported and exited cleanly.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+
+# realpath, not abspath: this is meant to be symlinked into ~/.local/bin so a launcher
+# can call `glasspad-profile` by name, and __file__ is then the symlink -- which would
+# make the computed repo root ~/.local and the import below fail for anyone who is not
+# standing in the repository.
+_HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.dirname(_HERE))
+
+from glasspad.layer_geom import default_layout_path, load_frames  # noqa: E402
+from glasspad.layer_profiles import (  # noqa: E402
+    DEFAULT_NAME, claim_path, list_profiles, profile_path, read_claim, resolve,
+    safe_name, seed_from, write_claim,
+)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="glasspad-profile", description=__doc__.split(".")[0])
+    ap.add_argument("profile", nargs="?", default=None,
+                    help="profile name to claim (omit with --list/--status/--seed)")
+    ap.add_argument("--config", default=None, help="config directory (advanced)")
+    ap.add_argument("--source", default="cli",
+                    help="who is asking, recorded in the claim: steam, retrodeck, hub")
+    ap.add_argument("--list", action="store_true", help="list profiles and exit")
+    ap.add_argument("--status", action="store_true", help="show the current claim")
+    ap.add_argument("--clear", action="store_true", help="remove the claim file")
+    ap.add_argument("--seed", action="store_true",
+                    help="create 'default' (a copy of layout.json) and 'fighter'")
+    ap.add_argument("--pid", type=int, default=None,
+                    help="record the claiming process id (informational)")
+    args = ap.parse_args(argv)
+
+    cfg = args.config or os.path.dirname(default_layout_path())
+
+    if args.list:
+        names = list_profiles(cfg)
+        if not names:
+            print(f"  no profiles in {os.path.join(cfg, 'profiles')} yet;"
+                  f" run: glasspad-profile --seed")
+            return 0
+        active = (read_claim(cfg) or {}).get("profile")
+        for n in names:
+            print(f"  {'*' if n == active else ' '} {n:<20}"
+                  f" {'(claimed)' if n == active else ''}")
+        print(f"  dir: {os.path.join(cfg, 'profiles')}")
+        return 0
+
+    if args.status:
+        claim = read_claim(cfg)
+        if not claim:
+            print(f"  no claim ({claim_path(cfg)} is absent or unreadable)")
+            print(f"  the overlay is using {args.profile or DEFAULT_NAME} or its startup layout")
+            return 0
+        print(f"  claimed: {claim['profile']}  by {claim.get('source', '?')}"
+              + (f"  pid {claim['pid']}" if claim.get("pid") else ""))
+        name, path, note = resolve(cfg, claim["profile"])
+        print(f"  resolves to: {path or 'nothing loadable'}"
+              + (f"  ({note})" if note else ""))
+        return 0
+
+    if args.seed:
+        src = os.path.join(cfg, "layout.json")
+        done = seed_from(cfg, src, [DEFAULT_NAME])
+        for name, note in done:
+            print(f"  {name}: {note}")
+        # fighter comes from the default's own geometry, so a hand-tuned layout is the
+        # base rather than the app's built-in one
+        dflt = profile_path(cfg, DEFAULT_NAME)
+        if os.path.exists(dflt):
+            from glasspad.layer_profiles import fighter_variant
+            frames, opacity, dpad_mode, _note = load_frames(dflt, 1707, 1067)
+            design = frames and _design(cfg, DEFAULT_NAME)
+            out, mode = fighter_variant(frames, design[0], design[1])
+            from glasspad.layer_geom import write_frames
+            dest = profile_path(cfg, "fighter")
+            if os.path.exists(dest):
+                print("  fighter: already exists, left alone")
+            else:
+                write_frames(dest, out, opacity, mode, screen=design)
+                print(f"  fighter: created from {DEFAULT_NAME} "
+                      f"(d-pad x1.33, sticks x0.75, 8-way)")
+        print(f"  now: glasspad-profile --list")
+        return 0
+
+    if args.clear:
+        try:
+            os.remove(claim_path(cfg))
+            print("  claim cleared")
+        except FileNotFoundError:
+            print("  nothing was claimed")
+        except OSError as exc:
+            print(f"  could not clear the claim: {exc}")
+        return 0
+
+    name = safe_name(args.profile)
+    if name is None:
+        ap.error(f"{args.profile!r} is not a usable profile name "
+                 f"(letters, digits, . _ -, starting with a letter or digit, "
+                 f"1-32 characters)")
+
+    resolved, path, note = resolve(cfg, name)
+    if note:
+        print(f"  note: {note}", file=sys.stderr)
+    write_claim(cfg, resolved, source=args.source, pid=args.pid)
+    if path is None:
+        # Still claim it: the user may create the profile a second later, and the
+        # overlay re-reads the claim on its own poll. Failing here would be the
+        # launcher's problem, not ours.
+        print(f"  claimed {resolved!r}, but nothing is loadable for it yet "
+              f"(glasspad-profile --seed makes default and fighter)",
+              file=sys.stderr)
+        return 0
+    print(f"  claimed {resolved} -> {path}")
+    return 0
+
+
+def _design(cfg: str, name: str) -> tuple[int, int]:
+    """The size the seed's source layout was authored for."""
+    from glasspad.layer_geom import load_screen_size
+    return load_screen_size(profile_path(cfg, name)) \
+        or load_screen_size(os.path.join(cfg, "layout.json")) \
+        or (1707, 1067)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
