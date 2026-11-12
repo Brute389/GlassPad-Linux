@@ -39,8 +39,12 @@ here unchanged.
   any in-flight exception — teardown belongs after the `try`/`except` chain so
   the handlers set a return code.
 * Linux with the `uinput` module, writable to your user (the installer enables both)
-* Optional: `PyQt6` — only for `--backend qt`, which is not in the bundles and needs a
-  checkout. Optional: `python-evdev` for reading the pad back.
+* Optional: `python-evdev` for reading the virtual pad back (`tools/pad_probe.py`).
+
+`PyQt6` used to be the first line of this list. The Qt/X11 backend it powered is gone —
+it was a second GUI toolkit, a third of the package bytes, and nothing inside a shipped
+artefact that exercised it. Its module names survive only in `glasspad/bundle.py`, as the
+list the artefact tests refuse to ship.
 
 ## Install
 
@@ -149,10 +153,15 @@ One finding from building this, since it bites anything that asks the question:
 > performs the same preload the app does. Before that it was reporting this machine's KWin
 > as having no layer-shell, over the exact overlay that was up on screen.
 
-`--status` is also backend-aware now: `--backend layer` reports layer-shell, the compositor,
-`/dev/uinput` and the profile store; `--backend qt` keeps reporting XShape and pass-through.
-Exit status is 0 only when the overlay could actually run — a diagnostic that always exits 0
-is not a diagnostic.
+`--status` reports what this backend actually needs: where `libgtk4-layer-shell` was found
+and from where, whether the compositor offers `zwlr_layer_shell_v1` (measured *after* the
+same `RTLD_GLOBAL` preload the app performs — see the note above), `/dev/uinput`, and the
+profile store. Exit status is 0 only when the overlay could actually run — a diagnostic that
+always exits 0 is not a diagnostic.
+
+`--backend layer` is still accepted, for launch options that were written when there was a
+choice; it selects nothing. `--backend qt` is refused with a sentence explaining what happened
+to it, because the alternative — a traceback, or silence — teaches the reader nothing.
 
 ## Check your tree
 
@@ -161,12 +170,12 @@ Three commands, in order of how much they cost:
 ```bash
 python3 -m glasspad --status      # this machine: library, compositor, /dev/uinput, profiles
 ./install.sh --check              # uinput module, group, udev rule, desktop entry
-python3 tools/check_all.py        # the whole suite: 20 suites, ~28 s
+python3 tools/check_all.py        # the whole suite: 20 suites, ~19 s
 ```
 
 `install.sh --check` changes nothing; it is the "why is there no overlay on screen"
-command, and it now reports the layer backend's dependencies rather than PyQt6, which was
-the one thing the shipped overlay does not need.
+command, and it walks the chain the overlay actually needs — PyGObject, GTK 4, the
+typelib, `libgtk4-layer-shell`, then a Wayland session — in the order they fail.
 
 The input ABI is checked by **importing** the module, never by grepping it, because this
 port's bug class was constants whose names were right while their numbers were off by one —
@@ -189,40 +198,37 @@ teardown, `parametrize`, `tmp_path`, `monkeypatch`, `approx`, `skip`). pytest is
 installed here and cannot be fetched, and a safety net that needs a package you lack is not
 a safety net. This is also why `check_all.py` routes that one file to the other runner
 instead of executing it: run directly it can only print *No module named pytest*, which is
-how 257 tests sit quietly inside a green-looking tree.
+how several hundred tests sit quietly inside a green-looking tree.
 
 Current tallies here:
 
 | piece | tally |
 | --- | --- |
-| stdlib suites | **204 passed** |
-| pytest-style suite, via `tools/run_tests.py` | **257 passed, 6 skipped** |
+| stdlib suites | **211 passed** |
+| pytest-style suite, via `tools/run_tests.py` | **84 passed, 0 skipped** |
 | in-app self-test (`GLASSPAD_SELFTEST`: real hub, resize, rotation, profiles, turbo) | **85 checks** |
+
+Those numbers are what `tools/check_all.py` prints on this machine, not an assertion — no
+test compares the README to the runner, because a pin that has to be edited every time a
+test is added is a pin people edit rather than read.
 
 Exit codes are three-state, because "everything passed" and "everything that *ran* passed"
 are different claims: `0` all green, `1` something failed, `2` something could not start at
 all. `--strict` folds the last case into a failure; the packaging gate treats `1` as fatal
 and prints `2` as a warning rather than pretending the tree is fully covered.
 
-Tallies legitimately differ by environment, which is not a failure:
+**The suite needs no display at all.** It used to want an X server: six tests called
+`open_display(":99")` by name against the Qt backend's XShape path, and a Wayland-only
+desktop skipped them. Those tests went with the backend they tested, and the result is worth
+stating plainly because it changed what a green run means:
 
-| Situation | Tally |
-| --- | --- |
-| offscreen, an X server on `:99` | `263 passed` |
-| offscreen, no X server anywhere | `257 passed, 6 skipped` |
-| offscreen, a Wayland session (Xwayland `:0`, no `:99`) | `257 passed, 6 skipped` |
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY python3 tools/run_tests.py   # 84 passed, 0 skipped
+```
 
-A Wayland-only desktop hits rows 3 and 5 without installing anything, and that
-is not a failure to fix: six tests call `open_display(":99")` by name, four of
-them with no fallback, so only a literal `:99` can satisfy them. `xorg-server`
-is a **test** dependency, never a runtime one — the app lazy-loads `libX11` /
-`libXext` and starts no server — so GlassPad itself runs the same whether or
-not the suite can reach `:99`. On Arch it is the package containing `Xvfb` that
-you want (often already present as a dependency).
-
-The 6 are not gated by `QT_QPA_PLATFORM`: they call libX11 `open_display()`
-directly and skip themselves when no server answers. The 4 under xcb are
-offscreen-only tests that skip the other way round.
+Nothing skips, so nothing is quietly unmeasured on the machine most users have. The live
+self-test is the part that *does* need a Wayland session, and `check_all.py` reports it as
+skipped rather than passed when there isn't one.
 
 `tools/run_tests.py` also drives the two uinput-safety legs: it runs with opening a real
 pad made impossible and counts how many times the code tried, which is the only way to see
@@ -235,7 +241,7 @@ without pytest:
 
 | File | Covers |
 | --- | --- |
-| `test_layer_geom.py` | geometry, the layout file, parity with the Qt path |
+| `test_layer_geom.py` | geometry, the layout file, and the element order and default rectangles pinned to the Windows numbers |
 | `test_resize_geom.py` | edit-mode sizing: grab zone, floors, clamping, reset |
 | `test_fit_screen.py` | rotation fit, the design-size field, `apply_screen` |
 | `test_turbo.py` | the square wave, arming rules, the watchdog exemption |
@@ -689,10 +695,10 @@ real bug.
 
 ### Stacking: the overlay may need a window rule
 
-KWin gives an X11 client its X11 stacking rules, so on xcb the overlay usually
-sits above a fullscreen game on its own. A native Wayland surface only *asks* to
-be kept above, and whether that is honoured is up to the compositor. If the
-overlay is under the game, force it:
+The layer backend asks to be an `OVERLAY` surface with `keep-above`, which is the whole
+reason it exists: the compositor is told which layer to draw in, instead of being raced for
+the top of a stack it owns. That request is still a request. On a compositor that treats it
+as advisory, the overlay ends up under the game and you need a rule:
 
 ```
 Plasma (Wayland)   System Settings > Window Management > Window Rules >
@@ -705,34 +711,20 @@ Others             any rule matching class GlassPad that forces always-on-top.
 
 `glasspad --status` prints the same note, so it is available without this file.
 
-### Native Wayland cannot express an empty input region
+`⊘` hides every surface (`set_visible(False)` on each one), so with the pad hidden the game
+gets the touches, and nothing stays pressed on the virtual pad: all active contacts are
+released on the way out, and a lockout keeps a finger that was mid-press from pressing again
+when the controls come back.
 
-Qt has no empty-but-not-null `QRegion`, so with **every** control hidden (the `⊘`
-toggle) the overlay still covers the game. Nothing stays pressed; touches simply
-do not reach the game until the controls come back. On xcb the equivalent state
-is a genuinely empty shape and passes through cleanly. This is a Qt limitation,
-not a shaping bug, and the only fix would be to unmap the window while disabled.
-Because the toggle now latches, this is no longer a momentary curiosity on
-Wayland: the overlay keeps swallowing input for as long as it is hidden, so
-press `⊘` again to restore both the controls and pass-through.
+There is no input-region trick here, because none is available. `set_input_region` on a KWin
+layer surface was measured to be **inert** — the call succeeds and changes nothing — so the
+shape rules live in the painters instead: `inside_shape()` refuses a tap that lands on the
+corner of a circular control's bounding box. That is the honest version of "the compositor
+will do this for us", which it will not.
 
-### The Qt backend's shaping paths are no longer covered by anything
-
-Both tools that exercised them (`verify_x11.py` for XShape, `verify_wayland.py` for
-`QWindow.setMask` → `wl_surface.set_input_region`) were retired in the cleanup pass: they
-tested the Qt backend, which is no longer in the shipped bundles, and neither had been run
-as part of anything automated for a long time. Their history is in git.
-
-What is verified now is the path that ships, and it is verified by measurement rather than
-by a tool: `set_input_region` on a KWin layer surface was measured to be **inert**, which is
-why the layer backend does shape gating in the painters instead (`inside_shape`,
-`tests/test_layer_geom.py`), and why the honest statement in the README is "the compositor
-will not do this for us" rather than a coverage claim.
-
-If you revive the Qt backend on a machine where it matters, the uncovered case is a session
-with Xwayland switched off: on ordinary KDE `DISPLAY` exists, so `_force_xcb()` picks xcb and
-XShape, and that behaviour is at least exercised by the dormant suite's session-detection
-tests.
+The caveat that used to sit in this section belonged to the Qt hub, which had no
+empty-but-not-null `QRegion`: hiding its controls left an invisible sheet over the game that
+swallowed every touch. That behaviour left with the backend.
 
 ### What binds this device — and it is not `xpad`
 

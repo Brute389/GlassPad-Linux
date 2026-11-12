@@ -167,7 +167,6 @@ do_check() {
       say ""
       say "backends"
       # The layer backend is the default and the only one that stays above a fullscreen
-      # game, so its prerequisites are the ones worth failing on. Reporting PyQt6 as *the*
       # dependency sent people to install a toolkit they would never use while saying
       # nothing about the one library that decides whether the overlay appears at all.
       python3 -c 'import gi' 2>/dev/null \
@@ -183,13 +182,13 @@ do_check() {
           || say "  layer-shell : NOT FOUND (pacman -S libgtk4-layer-shell | apt install libgtk4-layer-shell0)"
       python3 -c 'import gi; gi.require_version("Gtk4LayerShell", "1.0")' 2>/dev/null \
           || say "  layer-shell : library present, but the Gtk4LayerShell typelib is missing"
-      python3 -c "import PyQt6.QtCore as c; print('  PyQt6       :', c.PYQT_VERSION_STR, '(optional: --backend qt only)')" 2>/dev/null \
-          || say "  PyQt6       : not installed (optional, --backend qt only)"
       say ""
       say "display"
-      say "  DISPLAY          : ${DISPLAY:-<unset>}"
-      say "  WAYLAND_DISPLAY  : ${WAYLAND_DISPLAY:-<unset -- the layer backend needs Wayland>}"
-      say "  QT_QPA_PLATFORM  : ${QT_QPA_PLATFORM:-<unset, only the Qt backend reads this>}"
+      # Wayland first: it is the one this overlay can start without. DISPLAY is still
+      # reported because its presence used to decide which backend got picked, and
+      # people look for it here after a Qt-era note told them to.
+      say "  WAYLAND_DISPLAY  : ${WAYLAND_DISPLAY:-<unset -- REQUIRED, no session>}"
+      say "  DISPLAY          : ${DISPLAY:-<unset>} (X11; the overlay does not use it)"
 }
 
 # --- uinput -----------------------------------------------------------------

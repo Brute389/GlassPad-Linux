@@ -148,14 +148,18 @@ def test_the_test_stub_defines_every_attribute_the_real_overlay_starts_with():
 
 
 if __name__ == "__main__":
-    failed = 0
+    ran = failed = 0
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
+            ran += 1
             try:
                 fn()
                 print(f"  ok    {name}")
             except AssertionError as exc:
                 failed += 1
                 print(f"  FAIL  {name}:\n{exc}")
-    print(f"\n  {'all clean' if not failed else str(failed) + ' test(s) failed'}")
+    # A tally, not "all clean": tools/check_all.py treats a run with no numbers in it as
+    # a run that proved nothing -- and it is right. "all clean" from a runner whose tests
+    # were all renamed looks exactly like a pass.
+    print(f"\n  {ran - failed} passed, {failed} failed of {ran}")
     sys.exit(1 if failed else 0)

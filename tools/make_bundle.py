@@ -176,14 +176,11 @@ def sources() -> list[tuple[str, str]]:
     """(archive path, absolute source path) for everything the payload carries."""
     out = []
     pkg = os.path.join(ROOT, "glasspad")
-    from glasspad.bundle import QT_BACKEND_MODULES
     for dirpath, dirnames, filenames in os.walk(pkg):
         dirnames[:] = [d for d in dirnames if d != "__pycache__"]
         for fn in sorted(filenames):
             if fn.endswith((".pyc", ".pyo")) or fn.endswith(".orig"):
                 continue
-            if os.path.basename(dirpath) == "glasspad" and fn in QT_BACKEND_MODULES:
-                continue        # the Qt backend is not shipped; see glasspad/bundle.py
             full = os.path.join(dirpath, fn)
             rel = os.path.relpath(full, ROOT)
             out.append((os.path.join("app", rel), full))

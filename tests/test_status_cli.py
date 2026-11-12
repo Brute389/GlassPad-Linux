@@ -10,11 +10,14 @@ Two bugs this pins down, both found on a machine where the overlay works:
     or it tells you your compositor has no layer-shell on the exact machine where the
     overlay is up.
 """
+import ast
 import os
+import subprocess
 import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)   # in-suite imports (this file shells out for the rest)
 FAILS = []
 
 
@@ -74,10 +77,87 @@ def test_override_that_points_nowhere_is_reported_not_hidden():
     check("no traceback", "Traceback" not in out)
 
 
-def test_qt_backend_still_reports_its_own_internals():
-    code, out = run("--backend", "qt", "--status")
-    check(f"the fork left the Qt diagnostics intact (rc={code})",
-          "pass-through" in out or "PyQt" in out)
+def test_report_status_is_the_layer_one_now():
+    """One backend, so report_status() must not quietly still describe the other."""
+    from glasspad import __main__ as entry
+    src = open(entry.__file__).read()
+    fn = [n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "report_status"]
+    check("report_status() still exists", bool(fn))
+    body = ast.get_source_segment(src, fn[0]) or ""
+    check("it reports the layer stack", "libgtk4-layer-shell" in body)
+    check("it does not report a Qt session", "QT_QPA_PLATFORM" not in body)
+
+
+def test_cli_flags_never_start_the_overlay():
+    """`--version` once mapped a fullscreen transparent surface instead of printing.
+
+    The flag lived in the parser that was deleted, so nothing matched it and it fell
+    through to run_layer(). A blank overlay is not an error message -- it is a silent
+    hang with your desktop underneath, invisible to whoever typed the flag. Every
+    flag this file owns is run against the real CLI with a timeout, with the overlay's
+    entry point patched to raise, so a path that would start it fails loudly.
+    """
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    probe = (
+        "import sys;"
+        "sys.path.insert(0, %r);"
+        "import glasspad.overlay_layer as ol;"
+        "ol.main = lambda a: (_ for _ in ()).throw(AssertionError('overlay started'));"
+        "from glasspad.__main__ import main;"
+        "raise SystemExit(main(sys.argv[1:]))" % repo
+    )
+    cases = [("--version", "GlassPad"), ("--help", "usage:"), ("--status", "session"),
+             (["--backend", "bogus"], "unknown backend"),
+             (["--backend", "layer", "--status"], "session")]
+    for flag, expect in cases:
+        args = flag if isinstance(flag, list) else [flag]
+        try:
+            r = subprocess.run([sys.executable, "-c", probe] + args,
+                               capture_output=True, text=True, timeout=90, cwd=repo)
+        except subprocess.TimeoutExpired:
+            check(f"{' '.join(args)} returned instead of hanging", False)
+            continue
+        out = r.stdout + r.stderr
+        check(f"{' '.join(args)} did not start the overlay", "overlay started" not in out)
+        if expect:
+            check(f"{' '.join(args)} said {expect!r}", expect in out)
+
+    # the removed backend explains itself rather than tracing back
+    r = subprocess.run([sys.executable, "-c", probe, "--backend", "qt"],
+                       capture_output=True, text=True, timeout=90, cwd=repo)
+    out = r.stdout + r.stderr
+    check("--backend qt explains the removal",
+              "no 'qt' backend" in out and "layer backend is the only one" in out)
+    check("--backend qt does not trace back",
+          "Traceback" not in out and "No module named" not in out)
+    check("--backend qt is a usage error", r.returncode == 2)
+
+
+def test_take_backend_is_a_loop_not_a_trap():
+    """The stripper runs on every invocation, so a stuck index hangs the whole CLI.
+
+    It actually did: the non-flag branch appended without advancing, and `--version`
+    spun forever. Asserted directly on argv shapes, cheaply, because the infinite
+    version of this is invisible in a GUI that otherwise looks fine.
+    """
+    cases = [
+        ([], []),
+        (["--status"], ["--status"]),
+        (["--backend", "layer", "--edit"], ["--edit"]),
+        (["--backend=layer", "--profile", "fighter"], ["--profile", "fighter"]),
+        (["--edit", "--backend", "layer"], ["--edit"]),
+        (["--layout", "x.json", "--backend=layer", "--edit"], ["--layout", "x.json", "--edit"]),
+    ]
+    from glasspad import __main__ as entry
+    for argv, want in cases:
+        try:
+            got = entry.take_backend(list(argv))
+        except Exception as exc:                     # noqa: BLE001 - report, don't crash the suite
+            check(f"{argv} -> {want}", False)
+            continue
+        check(f"{argv} -> {want}", got == want)
+
+
 
 
 if __name__ == "__main__":

@@ -130,25 +130,34 @@ def test_hysteresis_still_switches_when_meant_to():
 
 
 # -- layout.json ----------------------------------------------------------
-def test_element_order_matches_the_qt_layout():
-    """layout.json identifies controls by INDEX alone, so ELEMENT_ORDER is load-
-    bearing. This asserts it against the Qt layout itself rather than trusting a
-    copy -- the failure mode is a control silently wearing another's rectangle.
+def test_element_order_is_the_pinned_one():
+    """layout.json identifies controls by INDEX alone, so the order is load-bearing.
+
+    There used to be a second implementation to cross-check this against -- the Qt
+    layout builder -- and it is gone, so this is now a frozen copy instead. That is
+    deliberately a pin rather than a re-derivation: a copy of ELEMENT_ORDER compared to
+    ELEMENT_ORDER proves nothing, whereas a literal fails the moment anyone reorders
+    the list, which is the change that silently moves every saved layout's rectangles
+    onto their neighbours. When it fails, the question is "how do existing layout.json
+    files migrate?", not "how do I make the test green?".
     """
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PyQt6.QtWidgets import QApplication, QWidget
-
-    app = QApplication.instance() or QApplication([])          # noqa: F841
-    from glasspad.layout import GamepadLayout
-
-    canvas = QWidget()
-    canvas.resize(1280, 800)
-    layout = GamepadLayout(canvas)
-    layout.build(1280, 800)
-
-    button_tags = [tag for _el, tag in layout.buttons]
-    stick_tags = [getattr(el, "name", "dpad") for el in layout.all_editable[len(button_tags):]]
-    assert button_tags + stick_tags == [tag for _n, _k, tag in ELEMENT_ORDER]
+    pinned = [
+        ("LT", "LT"), ("RT", "RT"),          # triggers
+        ("LB", "LB"), ("RB", "RB"),
+        ("Y", "Y"), ("X", "X"), ("B", "B"), ("A", "A"),
+        ("L3", "L3"), ("R3", "R3"),          # stick clicks
+        ("BACK", "\u229f"), ("GUIDE", "\u2299"), ("START", "\u229e"),
+        ("dpad", "dpad"),
+        ("LS", "LS"), ("RS", "RS"),
+    ]
+    got = [(n, tag) for n, _key, tag in ELEMENT_ORDER]
+    assert got == pinned, (
+        "ELEMENT_ORDER changed shape. Old layout.json files are positional, so this "
+        "needs a migration (see layer_geom.load_frames' keep= handling) before it can "
+        "ship, not just an update to this list.\n  got:      %s\n  expected: %s"
+        % (got, pinned))
+    tags = [tag for _n, _k, tag in ELEMENT_ORDER]
+    assert len(set(tags)) == len(tags), "two controls share one button tag"
 
 
 def test_defaults_are_in_element_order():
@@ -284,56 +293,47 @@ def test_degenerate_shape_is_empty_not_crashing():
     assert circle_region(3, 3).is_empty()
 
 
-def test_default_geometry_matches_the_qt_layout():
-    """The overlay's defaults must be the geometry the user already has.
+def test_default_geometry_is_the_pinned_one():
+    """The overlay's defaults are the geometry the user already has, now pinned literally.
 
-    Sizes and positions were transcribed from layout.GamepadLayout.build(); this
-    pins them, because "exactly like the app" is not something to eyeball. An
-    earlier revision used invented 96 px d-pad/stick sizes against the app's 180
-    and 119, and nothing failed.
+    These numbers were transcribed from the Windows client and then held against the Qt
+    port's `GamepadLayout.build()` while that existed. The cross-check is gone with it, so
+    the values are frozen here instead -- and freezing them is not ceremony: an earlier
+    revision used invented 96 px d-pad and stick sizes where the app has 180 and 119, and
+    nothing failed, because nothing was comparing them.
+
+    If you change a default on purpose, this fails and you write the new number here,
+    having looked at what it was before.
     """
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    try:
-        from PyQt6.QtWidgets import QApplication, QWidget
-    except Exception as exc:                                   # noqa: BLE001
-        raise _Skip(f"PyQt6 unavailable: {exc}") from exc
-
-    app = QApplication.instance() or QApplication([])          # noqa: F841
-    from glasspad.layout import GamepadLayout
-
-    canvas = QWidget()
-    canvas.resize(1280, 800)
-    lay = GamepadLayout(canvas)
-    lay.build(1280, 800)
-
-    pairs = ([(tag, el) for el, tag in lay.buttons]
-             + [(getattr(el, "name", "dpad"), el)
-                for el in lay.all_editable[len(lay.buttons):]])
-
-    # Compare by index, translating the Qt widget's printed tag back to the
-    # semantic name: back/guide/start are labelled with glyphs (\u229f \u2299 \u229e) rather than
-    # words, so matching on the visible text would KeyError on the first of them.
-    tag_to_name = {tag: name for name, _kind, tag in ELEMENT_ORDER}
+    pinned = [
+        ("LT", (40.0, 35.0, 110.0, 55.0)),
+        ("RT", (1130.0, 35.0, 110.0, 55.0)),
+        ("LB", (40.0, 100.0, 120.0, 48.0)),
+        ("RB", (1120.0, 100.0, 120.0, 48.0)),
+        ("Y", (1067.5, 295.5, 75.0, 75.0)),
+        ("X", (984.5, 378.5, 75.0, 75.0)),
+        ("B", (1150.5, 378.5, 75.0, 75.0)),
+        ("A", (1067.5, 461.5, 75.0, 75.0)),
+        ("L3", (168.0, 102.0, 44.0, 44.0)),
+        ("R3", (1068.0, 102.0, 44.0, 44.0)),
+        ("BACK", (499.0, 694.0, 52.0, 52.0)),
+        ("GUIDE", (609.0, 673.0, 62.0, 62.0)),
+        ("START", (729.0, 694.0, 52.0, 52.0)),
+        ("dpad", (85.0, 326.0, 180.0, 180.0)),      # the app's 180, not an invented 96
+        ("LS", (200.5, 564.5, 119.0, 119.0)),       # and 119, not 96
+        ("RS", (920.5, 564.5, 119.0, 119.0)),
+    ]
     ours = default_frames(1280, 800)
-    assert len(pairs) == len(ours) == 16, f"expected 16 controls, got {len(pairs)}"
-    got_order = [tag_to_name.get(t, t) for t, _el in pairs]
-    assert got_order == [n for n, _k, _t in ELEMENT_ORDER], \
-        f"order differs: {got_order}"
+    got = [(f.name, (float(f.x), float(f.y), float(f.w), float(f.h))) for f in ours]
+    assert got == pinned, "\n".join(
+        f"  {n:<7} got {g}  expected {e}" for (n, g), (n2, e) in zip(got, pinned) if g != e)
 
-    bad = []
-    for (tag, el), f in zip(pairs, ours):
-        g = el.geometry()
-        delta = max(abs(g.x() - f.x), abs(g.y() - f.y),
-                    abs(g.width() - f.w), abs(g.height() - f.h))
-        # 0.51, not 0.01: QWidget.geometry() hands back an integer QRect, so a
-        # rectangle at 1067.5 is reported as 1068 and rounding accounts for at most
-        # half a pixel. Any slack beyond that would let a real offset hide in it --
-        # the drift this test exists to catch was 100 px.
-        if delta > 0.51:
-            bad.append(f"{f.name} ({tag}): qt ({g.x()},{g.y()},{g.width()},{g.height()})"
-                       f" vs overlay ({f.x:.1f},{f.y:.1f},{f.w:.1f},{f.h:.1f})  off by {delta:.1f}px")
-    assert not bad, "geometry drifted from layout.py:\n    " + "\n    ".join(bad)
-
+    # Invariants that hold whatever the numbers are, so a future canvas size cannot put a
+    # control off-screen or below the size a thumb can hit.
+    for f in default_frames(1280, 800):
+        assert f.w >= 32 and f.h >= 32, f"{f.name} is smaller than MIN_CONTROL"
+        assert 0 <= f.x and 0 <= f.y and f.x + f.w <= 1280 and f.y + f.h <= 800, \
+            f"{f.name} sits outside the 1280x800 canvas"
 
 def test_stick_travel_clamps_onto_the_stop():
     """StickZone translates then scales back onto the circle; that rule is testable."""

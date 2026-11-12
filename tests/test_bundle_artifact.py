@@ -38,12 +38,12 @@ def _shipped_source_digest():
     """
     import hashlib
     sys.path.insert(0, ROOT)
-    from glasspad.bundle import QT_BACKEND_MODULES
+    from glasspad.bundle import REMOVED_QT_MODULES
 
     h = hashlib.md5()
     src = os.path.join(ROOT, "glasspad")
     for name in sorted(os.listdir(src)):
-        if not name.endswith(".py") or name in QT_BACKEND_MODULES:
+        if not name.endswith(".py"):
             continue
         h.update(name.encode())
         with open(os.path.join(src, name), "rb") as fh:

@@ -22,10 +22,12 @@ import os
 # the point, and it is asserted in the tests rather than assumed: 136 KiB, about a third of
 # the package bytes, used to ride along in both bundles.
 #
-# They are excluded from the payloads, not deleted: the Qt path still works from a checkout
-# and is the only route that does not need zwlr_layer_shell_v1 (GNOME without the extension,
-# a bare X session). Ask for it in a bundle and __main__ says so plainly.
-QT_BACKEND_MODULES = (
+# The modules themselves are GONE -- deleted in the orphan-code pass, recoverable from git
+# history. This list exists for one purpose now: the artefact suites assert none of these
+# names reappear in a payload. A second backend that nobody runs is how you ship an
+# untested code path, and a copy-paste out of history is the likeliest way to get one back
+# by accident. Deliberately reviving the Qt port means editing this list on purpose.
+REMOVED_QT_MODULES = (
     "window.py", "widgets.py", "layout.py", "zones.py", "touch_router.py",
     "editor.py", "license_window.py", "passthrough.py",
 )

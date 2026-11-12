@@ -37,6 +37,15 @@ LIVE_TIMEOUT_S = 60
 LEGACY_TIMEOUT_S = 900
 
 
+# Every runner in tests/ finishes with a tally. If none is present, nothing ran.
+_TALLY = re.compile(r"(\d+)\s*(?:tests?\b|passed\b|checks\b|failure\w*\b|skipped\b)")
+
+
+def tally_in(line: str) -> int:
+    """How many tests a summary line accounts for. 0 means the run proved nothing."""
+    return sum(int(m) for m in _TALLY.findall(line))
+
+
 def run_suite(path: str, verbose: bool) -> dict:
     t0 = time.monotonic()
     proc = subprocess.run([sys.executable, path], cwd=ROOT, capture_output=True,
@@ -49,6 +58,15 @@ def run_suite(path: str, verbose: bool) -> dict:
     rec = {"name": os.path.basename(path), "ok": proc.returncode == 0,
            "code": proc.returncode, "summary": summary, "secs": dt,
            "text": out}
+    if tally_in(summary) == 0:
+        # This is not a nitpick. A suite lost its `if __name__ == "__main__"` block
+        # during an edit, printed literally nothing, exited 0, and the tree was called
+        # green: exit codes cannot see a runner that has no tests in it. Treat "no
+        # tally" as a failure, because the only ways to get one are a deleted runner,
+        # renamed tests, or an early return -- all of which lose coverage silently.
+        rec["ok"] = False
+        rec["note"] = ("ran no tests -- no tally in the output (runner removed? tests "
+                       "renamed? import-time early exit?)")
     if "No module named" in out:
         # A suite that never started is a different fact from a suite that failed. Keep
         # them apart: the first is a to-do, the second is a broken build -- and a
@@ -100,10 +118,10 @@ def run_legacy(timeout_s: int, verbose: bool) -> dict:
     fetched), so invoking the file directly -- which is what the discovery loop does for
     everything else -- reports "No module named pytest" and the 259 tests inside it are
     silently lost. tools/run_tests.py is the runner for it: it installs a small pytest
-    stand-in (fixtures, parametrize, tmp_path, monkeypatch, approx) and needs PyQt6, which
+    stand-in (fixtures, parametrize, tmp_path, monkeypatch, approx) and needs nothing
     the Qt backend needs anyway.
 
-    If PyQt6 ever goes away this returns "blocked", not "passed": a suite that never
+    If an import ever fails this returns "blocked", not "passed": a suite that never
     started is a to-do, never a green tick.
     """
     runner = os.path.join(ROOT, "tools", "run_tests.py")
@@ -124,7 +142,7 @@ def run_legacy(timeout_s: int, verbose: bool) -> dict:
            "summary": summary, "secs": secs, "text": text}
     if "No module named" in text:
         rec["note"] = ("missing dependency -- these tests are NOT running "
-                       "(tools/run_tests.py needs PyQt6)")
+                       "(the runner could not import the suite)")
         rec["blocked"] = True
     return rec
 
@@ -137,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-artifacts", action="store_true",
                     help="skip the suites that inspect dist/ (used by the build scripts)")
     ap.add_argument("--no-legacy", action="store_true",
-                    help="skip the pytest-style suite (tools/run_tests.py, needs PyQt6)")
+                    help="skip the pytest-style suite (tools/run_tests.py)")
     ap.add_argument("--legacy-timeout", type=int, default=LEGACY_TIMEOUT_S,
                     metavar="SECONDS")
     ap.add_argument("-v", "--verbose", action="store_true",

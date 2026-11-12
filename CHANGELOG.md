@@ -4,6 +4,54 @@ Version numbers here belong to the **Linux port**. The Windows original stays
 1.0.2 forever, and docstrings throughout the tree that say "ported from GlassPad
 1.0.2" name that source release — they are provenance, not this version, and do
 not move on a bump. `test_version_strings_agree()` pins the distinction.
+## Unreleased — the Qt backend is deleted, not quarantined
+
+Eight modules gone: `window.py`, `widgets.py`, `layout.py`, `zones.py`,
+`touch_router.py`, `editor.py`, `license_window.py`, `passthrough.py` — 136 KiB and a
+third of the package bytes. They are in git history, and their names survive in
+`glasspad/bundle.py` as `REMOVED_QT_MODULES`, which the artefact suites use to refuse
+shipping them again. Keeping the exclusion list while the files existed was how a
+second backend stayed half-shipped forever; keeping the *names* is what stops a
+copy-paste out of history reinstating an untested path by accident.
+
+A third of the package and none of it exercised: `--backend qt` inside a bundle used to
+import half a toolkit that no test, no CI, and no artefact had touched in months. Every
+verification tool for it had already been retired in the previous pass.
+
+**What that cost, and what replaced it**
+
+* 148 tests went with the code they tested. What is left runs **with no display at all** —
+  `env -u DISPLAY -u WAYLAND_DISPLAY python3 tools/run_tests.py` gives 84 passed, 0 skipped,
+  where the suite previously needed Xvfb on `:99` for six of them. Zero skips is the point:
+  a green run with skips is green with holes in it.
+* Two Qt cross-checks in `test_layer_geom.py` became pins. The element order is frozen
+  (reordering it silently moves every saved `layout.json`'s rectangles, so the failure is the
+  migration prompt, not a nuisance), and the default rectangles are frozen at the Windows
+  numbers. Both verified negative: halving the d-pad to an invented 96 px fails the pin,
+  which is precisely the bug the deleted cross-check was written to catch.
+* `test_version_strings_agree` lost its About-box leg and gained a better one: the hub must
+  interpolate the package constant rather than carry its own literal, which is the failure
+  mode the original leg existed to catch.
+* The doc-pointer guard now distinguishes a broken link from provenance. Eighteen live
+  comments cite `window.py` for *which behaviour* was copied; rewriting them to "see git
+  history" would trade an explanation for a shrug. Exempting `REMOVED_QT_MODULES` keeps the
+  guard aimed at `NOTES.md`-style fiction.
+
+**Bugs the deletion surfaced**
+
+* `--version` and `--help` were owned by the Qt parser. Deleting the parser without the
+  branch meant both fell through to `run_layer()` and **started a fullscreen transparent
+  overlay** — a hang as far as any launcher is concerned, and invisible to the person who
+  typed it because the surface is see-through. Answered before anything can map a surface,
+  and guarded by a test that patches the overlay's entry point to raise.
+* `take_backend` spun forever on any argument that was not `--backend`: the append branch
+  forgot to advance the index. Diagnosed with `faulthandler.dump_traceback_later`, because
+  "the CLI hangs" has a lot of explanations and only one stack trace.
+* `tools/check_all.py` now fails a suite that reports no tally. One lost its `__main__`
+  block during an edit, printed nothing, exited 0, and the tree was called green; an exit
+  code cannot see a runner with no tests in it. `test_overlay_refs.py` was also made to
+  print a count rather than "all clean", for the same reason.
+
 ## Unreleased — orphan-code pass (layer backend is what ships)
 
 Deletions are recoverable: the tree is now a git repository, with the pre-cleanup

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Run the GlassPad test suite with no pytest installed.
 
-GlassPad ships to Arch desktops where PyQt6 is a system package and pytest
-often is not -- and this suite is the only check that a layout still loads, a
-stick still centres, and a BadWindow still cannot kill the overlay. A test
-suite that needs a package you do not have is not a safety net, so this runner
-reimplements the small slice of pytest the suite actually uses:
+GlassPad ships to Arch desktops where pytest is usually not installed, and this
+suite is the check that the pad ABI still matches the kernel, that the installer
+cannot point a uinput rule at a machine with no input group, and that a docstring
+pointer still names a file that exists. A safety net that needs a package you do
+not have is not a safety net, so this runner reimplements the slice of pytest the
 
     pytest.fixture(scope="session"|"function")   (including yield teardown)
     pytest.fixture(autouse=True)
@@ -239,11 +239,6 @@ def _resolve(name, instance, session_cache, per_test, tmp_root):
         mp = MonkeyPatch()
         per_test["monkeypatch"] = (mp, mp.undo)
         return mp
-    if name == "qapp":
-        if "qapp" not in session_cache:
-            from PyQt6.QtWidgets import QApplication
-            session_cache["qapp"] = QApplication.instance() or QApplication([])
-        return session_cache["qapp"]
 
     owner = getattr(instance, name, None) if instance is not None else None
     if owner is not None and getattr(owner, "__gp_fixture__", False):
@@ -264,9 +259,9 @@ def _call(fn, instance, session_cache, per_test, tmp_root, name=None):
     # not in its signature and never needs to be supplied here.
     if scope == "session":
         # The docstring promises session scope, so honour it for ordinary named
-        # fixtures too and not just for the built-in qapp. Worth being explicit:
-        # a session fixture that quietly re-ran per test would rebuild, say, a
-        # QApplication, and an autouse one would do it without any test asking.
+        # fixtures and not only for the built-ins. Worth being explicit:
+        # a session fixture that quietly re-ran per test would rebuild whatever it caches, and
+        # an autouse one would do it without any test asking.
         if name and name in session_cache:
             return session_cache[name]
     kwargs = {}
@@ -353,7 +348,6 @@ def main(argv=None) -> int:
                         default=str(ROOT / "tests" / "test_glasspad.py"))
     args = parser.parse_args(argv)
 
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
     install_fake_pytest()

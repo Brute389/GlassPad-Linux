@@ -2708,7 +2708,7 @@ def main(argv: list[str] | None = None) -> int:
         "GlassPad overlay on gtk4-layer-shell: one OVERLAY surface per control, so "
         "pass-through is structural rather than a mask, and the pad composites above "
         "fullscreen games -- the reason this is the default backend. Also reachable as "
-        "`python3 -m glasspad`, which adds --backend qt for the Qt window.\n\n"
+        "`python3 -m glasspad`, which answers --version and --status first.\n\n"
         "(--backend is read by that entry point and removed before this parser "
         "runs, so it is deliberately absent from the options below.)"))
     ap.add_argument("--null-pad", action="store_true", help="draw only, no uinput device")
