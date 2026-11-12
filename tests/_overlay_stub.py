@@ -156,6 +156,11 @@ def make_overlay(*, service=None, edit: bool = False, geo=None, hold_limit: floa
     ov.dpad8_btn = None
     ov.info = None
     ov.confirm = None
+    # the licence reader: added when the licence panel moved in-overlay, and
+    # required here by test_overlay_refs -- the stub is the one place.
+    ov.licence = None
+    ov.licence_view = None
+    ov.licence_scroll = None
     ov.discard = None
     ov.status_label = None
     ov.windows = []

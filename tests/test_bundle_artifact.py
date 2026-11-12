@@ -190,6 +190,28 @@ def test_the_launcher_header_is_plain_posix_sh():
         check(f"no bashism {bashism!r} in the header", bashism not in header)
 
 
+def test_the_licence_documents_resolve_inside_the_payload():
+    """The About box reads its text from wherever the artefact put it.
+
+    Unit tests can only ever exercise the checkout layout. This imports the copy of
+    bundle.py that shipped, from inside the unpacked artefact, and asks it to find the
+    two documents -- which is the question the panel actually asks at runtime, in a
+    directory shape that does not exist until packing happens.
+    """
+    from _licence_docs import licence_checks, load_packed_bundle
+
+    built = artifacts()
+    if not built:
+        print("  skip nothing built yet")
+        return
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(["unzip", "-q", "-o", built[-1], "-d", tmp], capture_output=True)
+        mod, where = load_packed_bundle(tmp)
+        check("the packed resolver is the one being tested", where.startswith(tmp))
+        licence_checks(mod, ".run", check)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

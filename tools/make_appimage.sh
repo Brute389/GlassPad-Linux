@@ -88,7 +88,13 @@ cp -r glasspad "$appdir/usr/share/glasspad/glasspad"
 find "$appdir/usr/share/glasspad" -name '__pycache__' -type d -prune -exec rm -rf {} +
 cp tools/glasspad-profile "$appdir/usr/bin/glasspad-profile"
 cp README.md "$appdir/usr/share/doc/glasspad/README.md"
-[ -f LICENSE ] && cp LICENSE "$appdir/usr/share/doc/glasspad/LICENSE" || true
+# The `[ -f ... ] && cp ... || true` shape here swallowed every failure: a build with
+# no licence copied, no error, and a binary that cannot answer "under what terms?".
+# These are conditions of distribution, so they abort instead.
+for doc in LICENSE licenses/THIRD-PARTY-NOTICES.txt; do
+    [ -f "$doc" ] || { echo "  ERROR: $doc is missing; refusing to ship without it" >&2; exit 1; }
+    cp "$doc" "$appdir/usr/share/doc/glasspad/$(basename "$doc")"
+done
 cp packaging/glasspad.svg "$appdir/usr/share/icons/hicolor/scalable/apps/glasspad.svg"
 
 cat > "$appdir/GlassPad.desktop" <<'DESKTOP'

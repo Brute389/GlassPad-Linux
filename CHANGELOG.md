@@ -4,6 +4,53 @@ Version numbers here belong to the **Linux port**. The Windows original stays
 1.0.2 forever, and docstrings throughout the tree that say "ported from GlassPad
 1.0.2" name that source release — they are provenance, not this version, and do
 not move on a bump. `test_version_strings_agree()` pins the distinction.
+## Unreleased — the licence is readable, and says what this build is
+
+The `Open-source licenses` pill reported success and opened nothing. It now opens a
+scrollable reader inside the overlay, and the notices describe the port rather than the
+Windows product it came from.
+
+**Why the pill never worked**, recorded because the failure shape is the lesson:
+`Gtk.UriLauncher.launch()` is asynchronous and was called with no callback, so PyGObject
+started it and discarded the result — the `except` could never fire, and the status line
+printed the path as though it had opened. There was also nothing to open *with*:
+`get_default_for_uri_scheme("file")` is `None` on a normal desktop; a path is not a URI
+scheme.
+
+**In-app reader instead of a launch.** A layer surface lives on the OVERLAY layer, so a
+launched editor appears *under* the controls — from a tablet that is indistinguishable
+from a crash. So: a read-only `TextView` in a `ScrolledWindow`, in the same centred-panel
+shape as the About box and save dialog, showing `LICENSE` then
+`licenses/THIRD-PARTY-NOTICES.txt`. Missing text is reported in the panel with the paths
+tried, because an empty box reads as "this app has no licence".
+
+**Notices rewritten for this build.** The old `THIRD-PARTY-NOTICES.txt` was HIDMaestro's
+— usbip-win2 drivers, DsHidMini report descriptors, SHA-256 sums of `.sys` files. None of
+it belongs to a port that creates its device through `uinput`. It now separates what is
+loaded from your system (GTK 4, Cairo, Pango, PyGObject, gtk4-layer-shell, Python — none
+redistributed), what is only *numbers* copied from the kernel headers, and the one thing
+actually shipped in an artefact: the AppImage type-2 runtime, with an honest note about
+the offline build borrowing it and `mksquashfs`. Windows-original material moved to
+`licenses/windows-original/` and ships in neither artefact.
+`licenses/GlassPad-LICENSE.txt` was byte-identical to `LICENSE` and is gone.
+
+**Packaging is now conditional on the licence being present.** Both builders abort if a
+document is missing instead of `|| true`-ing it away, and the artefact suites import the
+packed `bundle.py` from inside each artefact to prove the resolver works in layouts that
+exist only after packing. Checked from inside: `.run` puts the docs under `app/`, the
+AppImage under `usr/share/doc/glasspad/` while the code sits in
+`usr/share/glasspad/glasspad/` — which is exactly the layout mismatch the old
+`dirname(__file__)` guess could not survive.
+
+Caught on the way, by the guards added earlier: an unused `DOCS` constant in `bundle.py`
+(the reader names what it reads), and three new attributes missing from
+`tests/_overlay_stub.py`. My own first version of the notices test was also wrong — it
+failed on `usbip-win2` appearing in the file, where it appears precisely to say it is
+*not* used; the check is now positional (nothing Windows-only above the exclusion
+heading) instead of presence-based.
+
+Suite: 21 suites, 217 stdlib + 87 pytest-style + 92 live checks, zero skips.
+
 ## Unreleased — About box credits what it ports
 
 The About box said "by Dansunmi", copying the client's own credit line onto a build that

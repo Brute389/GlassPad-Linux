@@ -185,6 +185,28 @@ def test_extract_and_run_path():
           p.returncode == 0 and "GlassPad" in p.stdout)
 
 
+def test_the_licence_documents_resolve_inside_the_image():
+    """The About box reads its text from wherever the artefact put it.
+
+    Unit tests can only ever exercise the checkout layout. This imports the copy of
+    bundle.py that shipped, from inside the unpacked artefact, and asks it to find the
+    two documents -- which is the question the panel actually asks at runtime, in a
+    directory shape that does not exist until packing happens.
+    """
+    from _licence_docs import licence_checks, load_packed_bundle
+
+    built = images()
+    if not built:
+        print("  skip nothing built yet")
+        return
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        _ok, root, _proc = extract(built[-1], tmp)
+        mod, where = load_packed_bundle(root)
+        check("the packed resolver is the one being tested", where.startswith(root))
+        licence_checks(mod, "AppImage", check)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

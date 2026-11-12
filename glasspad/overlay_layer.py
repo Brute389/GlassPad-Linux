@@ -55,6 +55,7 @@ import time
 # so it is searched for rather than hardcoded. glasspad/bundle.py explains the order and
 # returns which rule matched, because "not found" is not a diagnosis.
 from glasspad.bundle import layer_shell_path as _find_layer_shell  # noqa: E402
+from glasspad.bundle import read_doc  # noqa: E402
 
 LAYER_SHELL_LIB, LAYER_SHELL_WHY = _find_layer_shell()
 
@@ -222,6 +223,15 @@ window.ctrl, window.hub, window.panelwin { background: transparent; }
 .pillbtn.warn:hover { background-color: rgba(154,80,40,0.9); }
 .pillbtn.grey { background-color: rgba(64,64,85,0.8); }
 .pillbtn.grey:hover { background-color: rgba(84,84,105,0.9); }
+/* the licence reader. A TextView in GTK 4 puts its glyphs under a `text` node,
+   and a colour set only on the outer node leaves them at the theme default -- a
+   dark theme on a dark panel is how a licence becomes a blank box. */
+.licence { background: rgba(26,26,46,0.96); border-radius: 14px; padding: 18px 22px; }
+.licence text { background: rgba(0,0,0,0.22); color: rgba(204,224,255,0.86);
+                font-size: 11px; }
+.licence textview, .licence viewport { background: transparent; }
+.licence scrollbar { background: none; }
+.licence scrollbar slider { background: rgba(160,184,184,0.35); min-width: 6px; }
 """
 
 #: Fill per control, straight from GamepadLayout.Build()'s #AARRGGBB literals.
@@ -273,6 +283,10 @@ class Overlay:
         self.dpad8_btn: Gtk.Button | None = None
         # info panel ("\u2139"), save confirmation, and the pad-status line inside info
         self.info: Gtk.Window | None = None
+        #: the licence reader, built on first use: it is opened once a year at most
+        self.licence: Gtk.Window | None = None
+        self.licence_view: Gtk.TextView | None = None
+        self.licence_scroll: Gtk.ScrolledWindow | None = None
         self.confirm: Gtk.Window | None = None
         self.discard: Gtk.Window | None = None
         self.status_label: Gtk.Label | None = None
@@ -2020,47 +2034,92 @@ class Overlay:
         self._set_edit(False)
         self._close_fab()
 
-    def _open_licenses(self) -> None:
-        """KNOWN BROKEN -- and the way it is broken is the interesting part.
+    def _licence_documents(self) -> tuple[str, list[str]]:
+        """(text, problems) for the reader: the MIT notice, then the third-party notices.
 
-        The original opens a LicenseWindow. This hands LICENSE to the desktop's
-        default handler, which does not work, and then reports that it did:
-
-          * ``Gtk.UriLauncher.launch()`` is asynchronous. Called with no callback,
-            PyGObject starts it and throws the result away, so the ``except`` below
-            can never fire and the status line is set to the path unconditionally.
-            Measured: returns ``None``, raises nothing, opens nothing.
-          * There is no handler for the ``file://`` scheme here anyway --
-            ``Gio.AppInfo.get_default_for_uri_scheme("file")`` returns ``None``,
-            even though ``text/plain`` resolves to Kate. A path is not a URI scheme.
-          * The bundles ship ``LICENSE`` but not ``licenses/``, so the plural in the
-            button's label -- and THIRD-PARTY-NOTICES.txt, the only one of those three
-            that mentions anything this build actually uses -- is unfulfillable in a
-            shipped artefact. HIDMaestro-LICENSE.txt describes the Windows original's
-            SDK, which this port does not have.
-
-        Left working-as-broken deliberately pending a decision on the replacement
-        (in-app scrollable text vs. a real https launch), because a half-fix here would
-        still leave the button promising something the payload cannot deliver. Fixing
-        the async call without fixing the payload just makes the failure report honestly
-        instead of lying.
+        `problems` is what makes this honest. A licence panel that renders an empty
+        rectangle is indistinguishable from one that renders nothing, and both read to
+        a user as "this app has no licence" -- so the reason has to be text on screen,
+        with the paths that were tried, rather than a silent empty buffer.
         """
-        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        for name in ("LICENSE", "LICENSE.txt", "LICENSE.md"):
-            path = os.path.join(here, name)
-            if os.path.exists(path):
-                try:
-                    Gtk.UriLauncher.new(f"file://{path}").launch(None, None, None)
-                except Exception as exc:                      # noqa: BLE001
-                    if self.status_label is not None:
-                        self.status_label.set_text(f"cannot open: {exc}")
-                    return
-                if self.status_label is not None:
-                    self.status_label.set_text(path)
-                return
-        if self.status_label is not None:
-            self.status_label.set_text("no LICENSE file found")
+        parts, problems = [], []
+        for heading, name in (("MIT licence", "LICENSE"),
+                              ("Third-party notices", "THIRD-PARTY-NOTICES.txt")):
+            body, problem = read_doc(name)
+            if problem:
+                problems.append(problem)
+                continue
+            parts.append(f"{heading}\n{'=' * 72}\n{body}")
+        return "\n\n".join(parts), problems
 
+    def _build_licence_panel(self) -> None:
+        """Read the licence where the overlay is, not in somebody else's window.
+
+        The original opens a LicenseWindow. Here that would mean launching a text
+        editor from a layer surface -- and a layer surface sits on the OVERLAY layer,
+        so whatever opened would land UNDER the controls, which reads as a crash from a
+        tablet. Handing the file to the desktop was the first attempt at this and it
+        did not even do that: see the note on `read_doc` in bundle.py about why
+        `file://` is not a scheme anybody registered.
+
+        So: a scrolled, read-only TextView in the same centred-panel shape as the
+        About box and the save dialog. No browser, no handler, no network, no portal,
+        and the text shown is the text that shipped in the artefact.
+        """
+        self.licence = self._make_menu_surface()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.add_css_class("licence")
+        # wider than the About box: licence text at About-box width is 90 lines of
+        # ragged right edge. Height comes from the scrolled window below, because this
+        # surface is sized by its child -- pinning it would paint nothing and still
+        # swallow taps.
+        box.set_size_request(int(S.INFO_MIN_WIDTH) + 180, -1)
+
+        view = Gtk.TextView()
+        view.set_editable(False)
+        view.set_cursor_visible(False)
+        view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        view.set_left_margin(10)
+        view.set_right_margin(10)
+        view.set_top_margin(8)
+        self.licence_view = view
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_min_content_height(300)
+        scroll.set_max_content_height(520)
+        scroll.set_child(view)
+        self.licence_scroll = scroll
+
+        box.append(scroll)
+        box.append(self._row(self._pill("Close", "grey", self._close_licence, 120, 34)))
+        self.licence.set_child(box)
+        self.windows.append(self.licence)
+
+    def _open_licenses(self) -> None:
+        body, problems = self._licence_documents()
+        if self.licence is None:
+            self._build_licence_panel()
+        if self.licence is None or self.licence_view is None:
+            return
+        if problems:
+            body = ("Not shipped in this build, or not readable:\n"
+                    + "".join(f"  - {p}\n" for p in problems)
+                    + ("\n" + body if body else ""))
+        self.licence_view.get_buffer().set_text(body or "No licence text available.")
+        if self.licence_scroll is not None:
+            # get_vadjustment(), not .vadjustment: it is an interface property of
+            # Gtk.Scrollable, and PyGObject does not expose interface properties as
+            # attributes -- the attribute form raises AttributeError at open time.
+            adj = self.licence_scroll.get_vadjustment()
+            if adj is not None:
+                adj.set_value(0.0)
+        self._close_info()        # both centre, and they would stack exactly
+        self._show_panel(self.licence)
+
+    def _close_licence(self) -> None:
+        if self.licence is not None:
+            self.licence.set_visible(False)
     def _update_dpad_buttons(self) -> None:
         if self.dpad4_btn is None or self.dpad8_btn is None:
             return
@@ -2432,6 +2491,34 @@ class Overlay:
             check("Close dismisses it", not self.info.get_visible())
             return False
 
+        def step_licence():
+            """The licence reader is a panel like any other, so drive it like one.
+
+            It used to be a pill that handed a file:// URI to a handler nobody
+            registers, reported success in the status line, and opened nothing. The
+            checks below are the ones that would have failed then: the panel exists,
+            it is visible, and the text it shows is the text that shipped.
+            """
+            self._open_info()
+            self._open_licenses()
+            check("licence panel opens",
+                  self.licence is not None and self.licence.get_visible())
+            body, problems = self._licence_documents()
+            check("licence text read from the tree"
+                  + ("" if not problems else f"  ({problems})"),
+                  bool(body.strip()) and not problems)
+            check("it is the MIT notice", "MIT" in body)
+            check("and the third-party notices shipped too", "gtk4-layer-shell" in body)
+            check("the about box stepped aside rather than stacking",
+                  self.info is not None and not self.info.get_visible())
+            buf = self.licence_view.get_buffer() if self.licence_view else None
+            shown = "" if buf is None else buf.get_text(
+                buf.get_start_iter(), buf.get_end_iter(), True)
+            check("and the widget actually holds that text",
+                  "MIT" in shown and len(shown) == len(body))
+            self._close_licence()
+            check("Close dismisses it", not self.licence.get_visible())
+            return False
         def step_dpad():
             self._set_dpad_mode(8)
             check("8-way selected", self.dpad_mode == 8)
@@ -2687,7 +2774,7 @@ class Overlay:
                  step_ghost_arm, step_ghost_after,
                  step_turbo_arm, step_turbo_fired, step_turbo_released,
                  step_disable_off,
-                 step_disable_on, step_edit_off_via_confirm, step_info, step_dpad, step_profile_setup, step_profile_switch,
+                 step_disable_on, step_edit_off_via_confirm, step_info, step_licence, step_dpad, step_profile_setup, step_profile_switch,
                  step_profile_defer, step_profile_cycle, step_live_geom, step_hide_fence, step_edge_gate, step_stick, step_stick_ui, step_quit_guard,
                  step_quit]
         t = 500

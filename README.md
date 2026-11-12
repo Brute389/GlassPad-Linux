@@ -204,9 +204,9 @@ Current tallies here:
 
 | piece | tally |
 | --- | --- |
-| stdlib suites | **215 passed** |
-| pytest-style suite, via `tools/run_tests.py` | **86 passed, 0 skipped** |
-| in-app self-test (`GLASSPAD_SELFTEST`: real hub, resize, rotation, profiles, turbo) | **85 checks** |
+| stdlib suites | **217 passed** |
+| pytest-style suite, via `tools/run_tests.py` | **87 passed, 0 skipped** |
+| in-app self-test (`GLASSPAD_SELFTEST`: real hub, resize, rotation, profiles, turbo, licence reader) | **92 checks** |
 
 Those numbers are what `tools/check_all.py` prints on this machine, not an assertion — no
 test compares the README to the runner, because a pin that has to be edited every time a
@@ -223,7 +223,7 @@ desktop skipped them. Those tests went with the backend they tested, and the res
 stating plainly because it changed what a green run means:
 
 ```bash
-env -u DISPLAY -u WAYLAND_DISPLAY python3 tools/run_tests.py   # 86 passed, 0 skipped
+env -u DISPLAY -u WAYLAND_DISPLAY python3 tools/run_tests.py   # 87 passed, 0 skipped
 ```
 
 Nothing skips, so nothing is quietly unmeasured on the machine most users have. The live
@@ -815,6 +815,37 @@ required no migration of files on disk.
 
 ## License
 
-See `licenses/` — GlassPad's own license plus `THIRD-PARTY-NOTICES.txt`
-(HIDMaestro, whose Windows virtual-controller concept this replaces with
-`uinput`).
+MIT — see `LICENSE` at the repository root. It carries the upstream copyright because
+this is a derivative work: the layout geometry, colours and animations are transcribed
+from `MainWindow.xaml` of GlassPad 1.0.2 for Windows by Dansunmi, and the thumbstick
+response from `Input/StickZone.cs` of the same project.
+
+`licenses/THIRD-PARTY-NOTICES.txt` covers what the port actually stands on, and keeps
+three things apart that a casual notice tends to blur:
+
+* **loaded from your system, not redistributed here** — GTK 4, GLib, Cairo, Pango,
+  PyGObject, gtk4-layer-shell, Python. Nothing is bundled by design, so replacing any
+  of it is your business, and nothing is linked statically.
+* **numbers taken from the kernel headers** — the uinput ABI constants in `xd360.py`,
+  from `input-event-codes.h` and `uinput.h`.
+* **shipped inside the AppImage** — the type-2 runtime, plus an honest note that the
+  offline build borrows a runtime and a `mksquashfs` from the build machine.
+
+`licenses/windows-original/` keeps HIDMaestro's licence and its notices for usbip-win2
+and DsHidMini. None of it is part of this build — the port creates its device through
+the kernel's `uinput` — and it ships in neither artefact. The rule is enforced rather
+than asserted: nothing Windows-only may appear above the notices file's *Not part of
+this build* heading, which is checked from inside each packed artefact.
+
+**In the app**, the About box's `Open-source licenses` pill opens a scrollable reader
+showing both documents inside the overlay. It deliberately does not launch a text
+editor: a layer surface lives on the OVERLAY layer, so anything launched lands *under*
+the controls, which from a tablet reads as a crash. If a document is missing, the panel
+names it and says how many places it looked, rather than rendering an empty box — which
+is what the pill used to do, one step better than reporting success while opening
+nothing.
+
+Both documents are conditions of shipping, so `tools/make_bundle.py` and
+`tools/make_appimage.sh` abort when either is absent, and the artefact suites import the
+packed `bundle.py` from inside each artefact to prove the panel resolves them in the
+layouts that only exist after packing.

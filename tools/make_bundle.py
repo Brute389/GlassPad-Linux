@@ -184,10 +184,18 @@ def sources() -> list[tuple[str, str]]:
             full = os.path.join(dirpath, fn)
             rel = os.path.relpath(full, ROOT)
             out.append((os.path.join("app", rel), full))
-    for extra in ("tools/glasspad-profile", "README.md", "LICENSE"):
+    # LICENSE and the notices are conditions of shipping, not nice-to-haves: the MIT
+    # notice must accompany the copy, and the About box renders both files. Skipping a
+    # missing extra silently is how a release goes out with no licence attached and
+    # nobody finds out until somebody asks for one, so these abort the build.
+    required = ("README.md", "LICENSE", os.path.join("licenses", "THIRD-PARTY-NOTICES.txt"))
+    for extra in ("tools/glasspad-profile",) + required:
         full = os.path.join(ROOT, extra)
         if os.path.isfile(full):
             out.append((os.path.join("app", extra), full))
+        elif extra in required:
+            raise SystemExit(f"make_bundle: {extra} is missing from {ROOT}; refusing "
+                             "to build a payload without the licence texts")
     icon = os.path.join(ROOT, "packaging", "glasspad.svg")
     if os.path.isfile(icon):
         out.append(("app/share/icons/glasspad.svg", icon))

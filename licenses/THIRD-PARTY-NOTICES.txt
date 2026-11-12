@@ -1,104 +1,94 @@
-HIDMaestro third-party notices
-==============================
+Third-party notices — GlassPad Linux port
+=========================================
 
-HIDMaestro includes the following third-party material. This notice is
-embedded in HIDMaestro.Core.dll and written to disk alongside usbip-win2
-whenever HIDMaestro deploys it.
+What this file is for
 
---------------------------------------------------------------------
-usbip-win2 (version 0.9.8.1)
-https://github.com/vadimgrn/usbip-win2
---------------------------------------------------------------------
+The GlassPad Linux port is distributed as its own Python source, plus — in the
+AppImage only — one upstream binary described under "Shipped inside the AppImage"
+below. Nothing else is bundled. The packaging tools deliberately ship no host
+libraries, because libgtk4-layer-shell has to match the machine's own libwayland
+and GTK 4: a bundled copy that disagrees produces a blank overlay rather than an
+error message.
 
-Used as the USB transport for HIDMaestro's composite USB personas
-(profiles that present USB Audio Class interfaces alongside HID). A
-Windows audio endpoint requires a driver-backed USB device, which no
-user-mode API can create, so HIDMaestro speaks the USB/IP protocol to
-usbip-win2's virtual host controller. Every device behavior remains in
-HIDMaestro's own user-mode code.
+So the entries below are listed so you know what you are running, not because this
+port conveys copies of them. Replace any of them whenever you like — nothing is
+linked statically, which is the whole point. Your distribution keeps the exact
+licence text for each package it installed (on Arch, /usr/share/licenses/<pkg>/).
 
-The redistributed binaries are usbip-win2's own signed host controller
-driver, unmodified: usbip2_ude.inf, usbip2_ude.sys and usbip2_ude.cat,
-unpacked at build time from usbip-win2's signed installers. The x64 files
-come from the v.0.9.8.1 release asset. The ARM64 files come from the same
-tag's build that the project's signing service (ossign.org) published in
-usbip-win2 issue #13, with drivers attestation-signed by Microsoft.
-HIDMaestro installs the one matching the machine's architecture. It does
-not redistribute the installers or the root-hub filter driver.
+1. This port, and what it derives from
+--------------------------------------
 
-Unpacked from USBip-0.9.8.1-x64.exe, SHA256:
-38cad6d4432b52d5bb9409d9ad03b72fdffc4ada4cd3a48fbeca1a2752a8518a
-  usbip2_ude.inf 1ae9e8dc497929de1a6be1291ae1dca6a19e7fd6c0351e8c266f65dd91f15073
-  usbip2_ude.sys abd4fc43dce40e027e4acc884cbfe92433e026206f6565c5ee5284a39441169a
-  usbip2_ude.cat 84dd6cc5985857adf1514a9ee202210ff3ee1384c9be40fd49d6810e23e25f3a
+The code in glasspad/ and tools/ is MIT licensed; see LICENSE alongside this file.
+That notice carries the upstream copyright, because this is a derivative work: it
+transcribes the layout geometry, colours and animations from MainWindow.xaml of
+GlassPad 1.0.2 for Windows by Dansunmi, and the thumbstick response from
+Input/StickZone.cs of the same project. Both are MIT licensed, and the notice is
+retained as that licence requires.
 
-Unpacked from USBip-0.9.8.1-arm64-release-attestation.exe, SHA256:
-cab7ff97f79275eeb5c5b8bb2eb3111ff6b6c4eead07d9bec9be5bd1e3a35800
-  usbip2_ude.inf 04b6ac34874198fc73b6bb11c003fc89f87df9d504f78109eb2b500d05ef09c1
-  usbip2_ude.sys 38c64546938ea99b6c3ec69f3e5169ad79afc47a59faceb51cfb35d038e249a2
-  usbip2_ude.cat 14c2aa313740e362256d4da721e18751f0ecf0dc19b5c5f3887f084145a6af78
+  https://github.com/dansunmi/GlassPad
 
-BSD 2-Clause License
+2. Loaded at runtime from your system — not redistributed here
+--------------------------------------------------------------
 
-Copyright (c) 2021-2026, Vadym Hrynchyshyn <vadimgrn@gmail.com>
+  GTK 4                    GNU LGPL-2.1-or-later
+  GLib / GObject / GIO     GNU LGPL-2.1-or-later
+  Cairo                    GNU LGPL-2.1-or-later or MPL-1.1 (dual licensed)
+  Pango                    GNU LGPL-2.1-or-later
+    (with HarfBuzz, Fontconfig and FreeType beneath it — MIT-style, MIT and
+     FreeType licences respectively)
+  PyGObject (gi)           GNU LGPL-2.1-or-later
+  gtk4-layer-shell         MIT, Copyright (c) 2023 Sophie Winter
+  Python 3                 Python Software Foundation License (PSF-2.0)
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
+gtk4-layer-shell is the one that is not part of a default GTK install: it supplies
+zwlr_layer_shell_v1, which is what keeps the controls above a fullscreen game
+instead of racing for the top of a stack the compositor owns.
 
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
+3. Numbers copied, not code
+---------------------------
 
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
+glasspad/xd360.py defines the constants of the Xbox 360 uinput ABI — struct
+layouts and key codes — taken from the Linux kernel headers input-event-codes.h
+and uinput.h (GPL-2.0 WITH Linux-syscall-note). These are numeric constants and
+struct field orders, used so the device this creates identifies itself to the
+kernel and to games as an ordinary Xbox 360 pad. The notice is for provenance:
+the numbers came from there, and when they drift the bug shows up as a controller
+that half works.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+4. Shipped inside the AppImage
+------------------------------
 
---------------------------------------------------------------------
-DsHidMini
-https://github.com/nefarius/DsHidMini
---------------------------------------------------------------------
+  AppImage runtime         MIT, the AppImage project contributors
+    https://github.com/AppImage/AppImageKit
 
-The dualshock-3-full profile reproduces the HID report descriptor that
-DsHidMini presents in its SXS mode (driver/HID/03_SXS_Col1_Joystick.h),
-and HIDMaestro's driver derives that mode's input and feature reports
-from the native DualShock 3 report the way DsHidMini does.
+  The type-2 runtime ELF is prepended to GlassPad-<version>-x86_64.AppImage. The
+  squashfs payload was produced with mksquashfs (GPL-2.0), which is used at build
+  time and is not part of the output.
 
-BSD 3-Clause License
+  Recorded for honesty: on the machine this was built, squashfs-tools and
+  appimagetool were unavailable, so the runtime was extracted from another
+  AppImage already present and the payload packed by borrowing a mksquashfs
+  binary. Installing squashfs-tools and appimagetool removes that dependency; the
+  build script prints which it borrowed on every run.
 
-Copyright (c) 2020-2025, Benjamin Höglinger-Stelzer
-All rights reserved.
+  The .run bundle contains no third-party binary at all: its launcher is POSIX sh
+  with a zip payload, which is also why it needs no FUSE.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
+5. Fonts
+--------
 
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
+None shipped. The client asks for "Segoe UI" by name and leaves the substitution
+to your fontconfig, which is what the Windows client effectively does too —
+hardcoding a fallback would be wrong on a machine that does have Segoe UI.
 
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
+6. Not part of this build
+-------------------------
 
-3. Neither the name of the copyright holder nor the names of its
-   contributors may be used to endorse or promote products derived from
-   this software without specific prior written permission.
+HIDMaestro, usbip-win2 and DsHidMini appear under licenses/windows-original/ and
+are shipped in neither artefact. They belong to the Windows original's transport:
+HIDMaestro presents a real USB device through a Windows kernel driver, and
+usbip-win2 and DsHidMini are its dependencies and report-descriptor reference.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+This port creates its device through the Linux kernel's uinput interface and links
+none of that code. The files are kept in the repository so the original's notices
+are not lost, not because anything here requires them.

@@ -130,3 +130,73 @@ def describe() -> str:
     # install.sh prints this line among its own, whose labels are padded to 12 before the
     # colon; "layer-shell" is 11 characters, so one space lines the colons up.
     return f"layer-shell : {p or 'NOT FOUND'} ({why})"
+
+# ---------------------------------------------------------------------------
+# Shipped documents: the MIT notice and the third-party notices
+# ---------------------------------------------------------------------------
+
+#: Environment override, for a packager that puts them somewhere else entirely.
+DOC_ROOT_ENV = "GLASSPAD_DOC_ROOT"
+
+def doc_roots() -> list[str]:
+    """Where a shipped document may live, most specific first, deduplicated.
+
+    The three layouts differ and none of them is "next to the code":
+
+        checkout    <repo>/glasspad/bundle.py            -> <repo>/
+        .run        app/glasspad/bundle.py               -> app/
+        AppImage    usr/share/glasspad/glasspad/bundle.py -> usr/share/glasspad,
+                    while the documents are staged under usr/share/doc/glasspad
+
+    A single hardcoded dirname() is how the About box ended up reporting a licence
+    path it had opened successfully when it had opened nothing at all. Searching is
+    cheap; guessing is what breaks.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(here)
+    out: list[str] = []
+    env = os.environ.get(DOC_ROOT_ENV, "").strip()
+    if env:
+        out.append(env)
+    for cand in (root,
+                 os.path.join(root, "licenses"),
+                 os.path.join(root, "..", "doc", "glasspad"),
+                 os.path.join(root, "share", "doc", "glasspad"),
+                 "/usr/share/doc/glasspad"):
+        out.append(cand)
+    seen, uniq = set(), []
+    for c in out:
+        c = os.path.normpath(c)
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    return uniq
+
+
+def find_doc(name: str) -> str | None:
+    """First existing path for a shipped document, or None. Never raises."""
+    for root in doc_roots():
+        path = os.path.join(root, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def read_doc(name: str) -> tuple[str, str | None]:
+    """(text, problem). Text is empty when the document could not be read.
+
+    The problem string is meant to be shown to the user, because a licence panel
+    that renders an empty box is indistinguishable from one that renders nothing,
+    and both read as "this app has no licence".
+    """
+    path = find_doc(name)
+    if path is None:
+        return "", f"{name}: not found (looked in {len(doc_roots())} places)"
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            body = fh.read().strip()
+    except OSError as exc:
+        return "", f"{name}: {exc}"
+    if not body:
+        return "", f"{name}: {path} is empty"
+    return f"{path}\n{'-' * 72}\n{body}\n", None
