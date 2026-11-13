@@ -29,7 +29,18 @@ here unchanged.
   | --- | --- | --- | --- |
   | bindings | `python-gobject` | `python3-gi` | `python3-gobject` |
   | GTK 4 | `gtk4` | `gir1.2-gtk-4.0` | `gtk4` |
-  | layer shell | `libgtk4-layer-shell` | `libgtk4-layer-shell0` | `libgtk4-layer-shell` |
+  | layer shell | `gtk4-layer-shell` | `libgtk4-layer-shell0` | `gtk4-layer-shell` |
+
+  The *library* is `libgtk4-layer-shell.so.0` on every distro; the *package* is not. On
+  Arch and CachyOS it is `gtk4-layer-shell`, and `libgtk4-layer-shell` — which earlier
+  drafts of this file told people to `pacman -S`, and which `--status` printed in five
+  places — matches no package at all, `Provides:` included. Only the Arch name has been
+  checked here, by asking `pacman -Qo` who owns the installed library; the Debian and
+  Fedora names are unverified, and `--status` labels them as such on screen rather than
+  presenting three guesses as equals. Trust the command printed for the machine you are
+  on: `glasspad/bundle.py` generates it from `/etc/os-release`, and
+  `tests/test_one_file_install.py` re-derives the Arch row from the package manager so
+  it cannot rot a second time.
 
 * **A compositor offering `zwlr_layer_shell_v1`** — KWin, Hyprland, Sway, wlroots. Stock
   GNOME is the common one that does not.
@@ -50,6 +61,11 @@ list the artefact tests refuse to ship.
 
 ## Install
 
+Two shapes of install, and only one of them is for a downloaded file. Holding
+`GlassPad-1.1.0-x86_64.AppImage`? Skip to
+[first run on a machine that has never had GlassPad](#first-run-on-a-machine-that-has-never-had-glasspad).
+`install.sh` is the same work done from a source checkout.
+
 ```bash
 sudo ./install.sh          # uinput module + udev rule + icons + desktop entry
 newgrp input               # or log out and back in — group membership is needed
@@ -62,18 +78,42 @@ privileged half alone — that is the mode a bundle runs.
 
 ### First run on a machine that has never had GlassPad
 
-A download is not executable, and a fresh machine will not let you create a
-virtual gamepad. Neither is a bug and both are one-time:
+Three things stand between a downloaded file and a pad that reaches a game. Two need
+a password; one needs a package manager, which is the single thing this program will
+not run on your behalf. `--install` does the two it can and names the one it cannot:
 
 ```bash
 chmod +x GlassPad-1.1.0-x86_64.AppImage
-./GlassPad-1.1.0-x86_64.AppImage --status            # read this first
-./GlassPad-1.1.0-x86_64.AppImage --install-uinput    # one password, once
-./GlassPad-1.1.0-x86_64.AppImage
+./GlassPad-1.1.0-x86_64.AppImage --install           # three steps, one password
+./GlassPad-1.1.0-x86_64.AppImage                     # done
 ```
 
-`--install-uinput` loads the `uinput` module at boot, installs the udev rule, and
-adds your account to `input`. The rule it writes is
+The `./` is not decoration: bash does not search the current directory, so the bare
+filename answers `command not found` about a file that is perfectly fine — which is
+exactly what the last person to install this typed.
+
+`--install` (alias `--setup`) runs, in this order:
+
+1. **`libgtk4-layer-shell`** — looked for, not installed. If it is missing, the package
+   command for *this* distribution is printed and the run stops there: asking for a
+   password for an overlay that cannot be drawn is a bad trade.
+2. **`/dev/uinput`** — one password. Loads the `uinput` module at boot, installs the
+   udev rule, adds your account to `input`.
+3. **A menu entry and a `glasspad` command** — no password. The menu entry makes it
+   clickable; `~/.local/bin/glasspad` makes every sentence this app prints — *run this*,
+   *confirm with that* — one you can follow. It refuses to write the command where
+   `PATH` cannot see it, and refuses to replace one that belongs to something else
+   without `--force`, because an install that announces success and then answers
+   `command not found` is the specific failure this path exists to remove.
+
+`--install --dry-run` rehearses all three, step 3 included, with no password and
+nothing written. Afterwards `--status` ends with one `NEXT:` line, so the report comes
+with its conclusion instead of leaving you to derive it from seven facts.
+
+The narrow commands remain for when you want one step rather than three:
+`--install-uinput`, `--install-desktop`, and their `--uninstall-` counterparts.
+
+The rule step 2 writes is
 [`packaging/glasspad-udev.rules`](packaging/glasspad-udev.rules), copied verbatim —
 it is a separate file so you can read it and so `udevadm verify` can check it, and
 `install.sh` refuses to run without it rather than falling back to a copy of its
@@ -121,9 +161,10 @@ case — asking for a password to read a plan is absurd.
 | | |
 | --- | --- |
 | **Virtual gamepad** | `--install-uinput`, one password. It carries `packaging/glasspad-udev.rules` and the script that installs it, escalates through `pkexec`, adds your account to `input`, and then asks the *account* — not root — whether the device is writable, because root can always write it and a root-side verdict would be a lie. |
+| **A `glasspad` command** | Written by `--install-desktop` alongside the menu entry: a symlink to the AppImage, or a wrapper for a checkout, in `~/.local/bin`. Every diagnostic here is imperative — *run this*, *confirm with that* — and none of them are followable without it. It will not install where `PATH` cannot see it, and will not overwrite a `glasspad` belonging to a package or another build unless told to. |
 | **A menu entry** | `--install-desktop`. Writes `org.glasspad.GlassPad.desktop` with `Exec=` from `$APPIMAGE`, the runtime's own record of the file you ran, and puts the icon in your own icon theme. |
 | **Undoing either** | `--uninstall-uinput`, `--uninstall-desktop`. Both are narrow on purpose: neither touches your layout, your profiles, the `input` group, or the loaded kernel module. |
-| **`libgtk4-layer-shell`** | **The one thing no packaging format can bring.** It has to match the host's `libwayland` *and* GTK 4; a bundled copy that mismatches gives a blank overlay instead of an error. So the app finds it, says which rule matched, and if it is missing prints the command for your distro (`pacman -S libgtk4-layer-shell` / `apt install libgtk4-layer-shell0` / `dnf install libgtk4-layer-shell`) and exits nonzero rather than starting something invisible. |
+| **`libgtk4-layer-shell`** | **The one thing no packaging format can bring.** It has to match the host's `libwayland` *and* GTK 4; a bundled copy that mismatches gives a blank overlay instead of an error. So the app finds it, says which rule matched, and if it is missing prints the package command for your distro — generated from `/etc/os-release`, with the rows nobody has verified labelled as unverified — and exits nonzero rather than starting something invisible. |
 | **A compositor with `zwlr_layer_shell_v1`** | KWin, Hyprland, Sway, wlroots yes; stock GNOME no. Nothing installs this. |
 
 So the honest instruction for a new user is: **one file, plus one package-manager

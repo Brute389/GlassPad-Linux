@@ -2987,7 +2987,11 @@ def main(argv: list[str] | None = None) -> int:
         # place when something launched GlassPad from a terminal. This is the
         # place that matters when it came from a desktop icon: nothing else on
         # screen will ever look wrong.
-        ov._say("NO PAD: /dev/uinput not writable -- run:  glasspad --install-uinput")
+                # Deliberately terse and path-free: this string is painted onto the overlay,
+        # where the absolute path of a 1.5 MB AppImage sitting in a Downloads folder does
+        # not fit and cannot be copy-pasted anyway. The full instruction, with a command
+        # that actually runs, goes to stderr for whoever launched this from a terminal.
+        ov._say("NO PAD: /dev/uinput not writable -- run with --install")
     ov.stick_anchor = args.stick_anchor
     ov.edge_margin = edge_clamp(args.edge_margin)
     tuning, warn = stick_preset(args.stick_preset) if args.stick_preset \

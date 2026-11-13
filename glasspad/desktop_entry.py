@@ -77,15 +77,36 @@ def launch_target(env=None) -> tuple[str | None, str]:
         # which is what the `Path=` key sets below, so no PYTHONPATH is needed.
         return f"{py} -m glasspad", f"the checkout at {root}"
 
+    # A `glasspad` on PATH is accepted only when it is demonstrably THIS install.
+    # An unqualified `which` was here before, and it was a hole: any command by that
+    # name -- another build, a distribution package, a symlink to an AppImage that
+    # happens to be in someone's ~/.local/bin -- became Exec= for whichever tree asked.
+    # Found by installing the CLI link on a real machine: a copied-out folder that used
+    # to refuse then wrote a menu entry launching the *other* GlassPad, and exited 0.
+    # The rule is the one bundle.cli_hint() uses, so the command a message suggests and
+    # the command a menu entry runs are chosen the same way.
+    ignored = None
     on_path = shutil.which("glasspad")
     if on_path:
-        return on_path, "the glasspad command on PATH"
+        from glasspad import bundle
+        if bundle._is_our_command(on_path, ("checkout", root)):
+            return on_path, "the glasspad command this install wrote"
+        try:
+            ignored = os.path.realpath(on_path)
+        except OSError:
+            ignored = on_path
 
     if runnable and py and os.path.abspath(here).startswith(_site_dirs()):
         return f"{py} -m glasspad", "the installed glasspad package"
 
-    return None, ("nothing launchable: no APPIMAGE, no checkout beside this "
-                  "package, no glasspad on PATH")
+    why = ("nothing launchable: no APPIMAGE, no checkout beside this "
+           "package, no glasspad on PATH")
+    if ignored:
+        why += (f"\n                 (a `glasspad` IS on PATH at {on_path}, pointing at"
+                f"\n                  {ignored} -- not this install, so it is not used;"
+                "\n                  an entry that launches a different GlassPad than"
+                " the one\n                  you installed is worse than no entry)")
+    return None, why
 
 
 def _site_dirs() -> str:
@@ -166,7 +187,7 @@ Exec="{status}"
 """
 
 
-def install_desktop(dry: bool = False) -> int:
+def install_desktop(dry: bool = False, force: bool = False) -> int:
     """Write the menu entry and the icon into the user's own directories.
 
     Never needs root, never writes outside $XDG_DATA_HOME, and prints every path
@@ -193,6 +214,13 @@ def install_desktop(dry: bool = False) -> int:
         if icon_dest:
             print(f"would copy {icon} -> {icon_dest}")
         print(f"launch target: {target}  ({why})")
+        # The rehearsal has to rehearse all of it: a --dry-run that quietly
+        # omits the command line is how you discover the difference on the real
+        # run, which is the one that has a password prompt in it.
+        from glasspad import bundle
+        print()
+        bundle.install_cli_link(dry=True, force=force)
+
         return 0
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -240,6 +268,18 @@ def install_desktop(dry: bool = False) -> int:
             pass
 
     print("the entry appears on the next menu refresh; log out and in if it does not.")
+
+    # The menu entry makes the app clickable. The command makes it fixable:
+    # every diagnostic this program prints is imperative -- run this, confirm
+    # with that -- and for someone whose GlassPad is one file in a Downloads
+    # folder, none of those sentences are followable until `glasspad` exists.
+    # A refused link does not undo the entry, so it is reported rather than
+    # returned: the menu item works either way.
+    print("\ncommand line")
+    from glasspad import bundle
+    if bundle.install_cli_link(dry=dry, force=force) != 0:
+        print("  (the menu entry is installed regardless; the messages above")
+        print("   name the file directly until a `glasspad` command exists)")
     return 0
 
 
@@ -257,6 +297,12 @@ def uninstall_desktop() -> int:
             except OSError as exc:
                 print(f"could not remove {path}: {exc.strerror}")
                 return 1
+    # The CLI link is part of what install_desktop created, so it is part of what
+    # uninstall takes back. uninstall_cli_link() only removes a link that points at
+    # this install, so a `glasspad` belonging to a package or another build survives.
+    from glasspad import bundle
+    bundle.uninstall_cli_link()
+
     if removed:
         for p in removed:
             print(f"removed {p}")

@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import ctypes.util
 import os
+import shlex
 import shutil
 import tempfile
 
@@ -128,11 +129,11 @@ def uinput_ready(path: str = UINPUT_PATH) -> tuple[bool, str]:
     """
     if not os.path.exists(path):
         return False, (f"{path} does not exist: the uinput kernel module is not "
-                       "loaded. Fix with:  glasspad --install-uinput")
+                       f"loaded. Fix with:  {cli_hint()} --install-uinput")
     if not os.access(path, os.W_OK):
         return False, (f"{path} exists but you cannot write it, so there is no "
-                       "gamepad. One command fixes it, one password:  "
-                       "glasspad --install-uinput")
+                       f"gamepad. One command fixes it, one password:  "
+                       f"{cli_hint()} --install-uinput")
     return True, path
 
 
@@ -331,3 +332,302 @@ def installer_rule_src(installer: str | None) -> str | None:
         return None
     cand = os.path.join(os.path.dirname(os.path.abspath(installer)), RULE_REL)
     return cand if os.path.isfile(cand) else None
+
+
+# --- what a first-run user can actually run ---------------------------------
+#
+# Every diagnostic in this app is a sentence telling somebody to run something. For
+# most of its life those sentences were written from the developer's side of the wall:
+# `glasspad --install-uinput`, when the person reading it has one downloaded file and
+# no command called glasspad, and `sudo pacman -S libgtk4-layer-shell`, which is not a
+# package that exists. Both fail at the exact moment someone is following instructions
+# under stress, and both fail with "not found" -- the least informative answer a
+# message can give. These helpers resolve the names against the machine instead of
+# against assumptions.
+
+CLI_NAME = "glasspad"
+BIN_DIR_ENV = "GLASSPAD_BIN_DIR"
+LINK_MARKER = "# GlassPad CLI link -> "      # how we recognise our own files
+OS_RELEASE = "/etc/os-release"
+
+# The library that cannot be bundled, and what the package managers call it.
+# `verified` is part of the data rather than a comment because the last person who
+# guessed got it wrong in five places at once: Arch/CachyOS ships gtk4-layer-shell,
+# and libgtk4-layer-shell -- the name we printed everywhere -- matches nothing in the
+# repositories. tests/test_one_file_install.py re-derives the Arch entry from
+# `pacman -Qo` on the installed library, so this row cannot rot quietly.
+DEPENDENCY_PACKAGES = (
+    ("Arch / CachyOS / EndeavourOS", ("arch", "cachyos", "manjaro"),
+     "gtk4-layer-shell", "verified on Arch family: `pacman -Qo` on the installed "
+     "library names this package, and `pacman -Ss libgtk4-layer-shell` matches nothing"),
+    ("Fedora / Bazzite / Bluefin", ("fedora", "rhel"),
+     "gtk4-layer-shell", "not verified on this machine"),
+    ("Debian / Ubuntu / SteamOS", ("debian", "ubuntu"),
+     "libgtk4-layer-shell0", "not verified on this machine"),
+)
+
+
+def os_release_ids() -> tuple[str, ...]:
+    """ID and ID_LIKE from /etc/os-release, lowercased. Empty if unreadable."""
+    out: list[str] = []
+    try:
+        with open(OS_RELEASE, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                key, _, val = line.partition("=")
+                if key.strip() in ("ID", "ID_LIKE"):
+                    out.extend(val.strip().strip('"').lower().split())
+    except OSError:
+        pass
+    return tuple(out)
+
+
+def os_release_label() -> str:
+    try:
+        with open(OS_RELEASE, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith("PRETTY_NAME="):
+                    return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return "this distribution"
+
+
+def dependency_rows() -> list[tuple[str, str, str, bool]]:
+    """(label, package, why-we-know, is-this-us) with the local row first."""
+    ids = os_release_ids()
+    rows = []
+    for label, matches, pkg, verified in DEPENDENCY_PACKAGES:
+        mine = any(any(i == m or i.startswith(m + "_") for m in matches) for i in ids)
+        rows.append([label, pkg, verified, mine])
+    rows.sort(key=lambda r: (not r[3],))
+    return [(a, b, c, d) for a, b, c, d in rows]
+
+
+def dependency_hint() -> str:
+    """The install instruction, generated from the machine rather than from memory."""
+    rows = dependency_rows()
+    local = rows[0] if rows and rows[0][3] else None
+    lines = [
+        "",
+        "GlassPad's overlay needs libgtk4-layer-shell. No bundle can carry it: the copy",
+        "has to match this machine's libwayland AND GTK 4, and when it does not you get",
+        "a blank overlay rather than an error. So the app finds it, and if it is missing",
+        "you need the package.",
+        "",
+    ]
+    if local:
+        lines.append(f"This looks like {os_release_label()}, so:")
+        lines.append("")
+        lines.append(f"    sudo {'pacman -S' if 'arch' in os_release_ids() else 'dnf install' if 'fedora' in os_release_ids() else 'apt install'} {local[1]}")
+        lines.append("")
+        lines.append(f"    ({local[2]})")
+        lines.append("")
+        lines.append("Elsewhere:")
+        lines.append("")
+        for label, pkg, verified, mine in rows:
+            if mine:
+                continue
+            lines.append(f"    {label:<28} {pkg:<24} ({verified})")
+    else:
+        lines.append("Install the package your distribution uses for it:")
+        lines.append("")
+        for label, pkg, verified, _ in rows:
+            lines.append(f"    {label:<28} {pkg:<24} ({verified})")
+    lines += ["",
+              "Installed somewhere unusual? Say so and --status will use it:",
+              f"    GLASSPAD_LAYER_SHELL=/path/to/libgtk4-layer-shell.so.0 {cli_hint()} --status",
+              ""]
+    return "\n".join(lines)
+
+
+def app_image_path() -> str | None:
+    """The AppImage file being run, or None. Set by the runtime, not by us."""
+    p = (os.environ.get("APPIMAGE") or "").strip()
+    return p if p and os.path.exists(p) else None
+
+
+def checkout_root() -> str | None:
+    """The source tree, when running out of one."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(here)
+    return root if (os.path.isdir(os.path.join(root, "glasspad"))
+                    and (os.path.exists(os.path.join(root, "README.md"))
+                         or os.path.exists(os.path.join(root, "install.sh")))) else None
+
+
+def cli_target() -> tuple[str, str] | None:
+    """("appimage"|"checkout", path) for the install that is answering right now."""
+    img = app_image_path()
+    if img:
+        return ("appimage", img)
+    root = checkout_root()
+    return ("checkout", root) if root else None
+
+
+def _is_our_command(path: str, target: tuple[str, str]) -> bool:
+    """Is this file a `glasspad` command belonging to THIS install?
+
+    Two shapes answer yes: a symlink resolving to the AppImage being run, or a wrapper
+    script carrying our marker line for the tree being run from. Everything else -- a
+    distribution package, another build, a stale link left behind -- is not ours to
+    suggest (cli_hint) and not ours to put in Exec= (desktop_entry.launch_target).
+    """
+    try:
+        if os.path.realpath(path) == os.path.realpath(target[1]):
+            return True
+    except OSError:
+        return False
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            head = fh.read(400)
+    except OSError:
+        return False
+    return head.startswith("#!") and LINK_MARKER + target[1] in head
+
+
+def cli_hint() -> str:
+    """A command the reader can paste on THIS machine, right now.
+
+    Order matters, and the middle case is the dangerous one:
+
+      * `glasspad` when something on PATH resolves to *this* install;
+      * otherwise the absolute path of the running AppImage, quoted -- it usually lives
+        in a Downloads folder. An older `glasspad` elsewhere on PATH is deliberately NOT
+        preferred: telling someone to run a different copy of the app than the one that
+        just warned them is how you fix the wrong install. It is the same shadowing that
+        AppRun exports PYTHONSAFEPATH to prevent; here the shadow has a name and a
+        password prompt attached to it.
+      * `python3 -m glasspad` for a checkout, which is what works from inside the tree.
+    """
+    tgt = cli_target()
+    on_path = shutil.which(CLI_NAME)
+    if on_path and tgt and _is_our_command(on_path, tgt):
+        return CLI_NAME
+    if tgt and tgt[0] == "appimage":
+        return f'"{tgt[1]}"' if " " in tgt[1] else tgt[1]
+    if tgt and tgt[0] == "checkout":
+        return "python3 -m glasspad"
+    return CLI_NAME
+
+
+def cli_bin_dir() -> str:
+    """Where the `glasspad` command should live. Override for tests or odd setups."""
+    over = (os.environ.get(BIN_DIR_ENV) or "").strip()
+    if over:
+        return os.path.abspath(over)
+    return os.path.join(os.path.expanduser("~"), ".local", "bin")
+
+
+def install_cli_link(dry: bool = False, force: bool = False) -> int:
+    """Make `glasspad` a real command for this user, pointing at THIS install.
+
+    Every message the app prints is imperative -- run this, confirm with that. This is
+    what makes those sentences true for somebody holding a single downloaded file.
+
+    The refusals are the part worth reading:
+
+      * A directory that is not on PATH is not a place to install a command. Writing it
+        anyway produces an install that appears to succeed and then cannot be run, which
+        is the failure shape this whole pass exists to remove; so we say no and print the
+        exact line that would fix PATH.
+      * If something else already owns the name, it is not ours to replace -- a
+        distribution package, or a different build of GlassPad. --force says otherwise.
+    """
+    tgt = cli_target()
+    if not tgt:
+        print("  cannot work out what to point a `glasspad` command at;")
+        print("  neither an AppImage nor a source tree is answering right now.")
+        return 2
+
+    kind, target = tgt
+    bin_dir = cli_bin_dir()
+    dest = os.path.join(bin_dir, CLI_NAME)
+    how = f"symlink {dest} -> {target}" if kind == "appimage" else f"wrapper script {dest}"
+
+    if dry:
+        print(f"  would write: {how}")
+        return 0
+
+    if os.path.islink(dest) or os.path.exists(dest):
+        if _is_our_command(dest, tgt):
+            print(f"  `glasspad` already points here: {dest}")
+            return 0
+        if not force:
+            print(f"  refused: something else owns {dest}")
+            try:
+                real = os.path.realpath(dest)
+                print(f"           it resolves to {real}")
+            except OSError:
+                pass
+            print("  Not replacing it. If that is the file you want gone, remove it and")
+            print("  re-run, or pass --force.")
+            return 1
+        # Asked for explicitly, so do it visibly: name the file, and say where its old
+        # target went. A silently overwritten command is how a distribution package
+        # disappears off PATH with nothing to point at afterwards.
+        try:
+            print(f"  --force: replacing {dest}")
+            print(f"           (was: {os.path.realpath(dest)})")
+        except OSError:
+            pass
+        try:
+            os.unlink(dest)
+        except OSError as exc:
+            print(f"  could not remove it: {exc}")
+            return 1
+
+    if bin_dir not in [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]:
+        print(f"  refused: {bin_dir} is not on PATH, so a command written there")
+        print("  could not be run -- an install that reports success and then says")
+        print("  'command not found' is worse than not installing.")
+        print('  Add it to your shell profile, then re-run:')
+        print(f'      export PATH="{bin_dir}:$PATH"')
+        return 1
+
+    try:
+        os.makedirs(bin_dir, mode=0o755, exist_ok=True)
+        if kind == "appimage":
+            os.symlink(target, dest)
+        else:
+            with open(dest, "w", encoding="utf-8") as fh:
+                fh.write("#!/bin/sh\n"
+                         + LINK_MARKER + target + "\n"
+                         + "# Written by the GlassPad installer (--install-desktop). Delete to undo.\n"
+                         + f"export PYTHONPATH={shlex.quote(target)}\n"
+                         + "export PYTHONSAFEPATH=1\n"       # see AppRun: the cwd must not shadow
+                         + 'exec python3 -m glasspad "$@"\n')
+            os.chmod(dest, 0o755)
+    except OSError as exc:
+        print(f"  could not write {dest}: {exc}")
+        return 1
+
+    print(f"  command installed: {dest}")
+    # Re-resolved rather than hard-coded: if the link we just wrote is not reachable
+    # (PATH not refreshed in this shell, say) the hint falls back to the real path
+    # instead of promising a command that answers "not found".
+    print(f"  (you can now run:  {cli_hint()} --status)")
+    return 0
+
+
+def uninstall_cli_link(dry: bool = False) -> int:
+    """Remove the `glasspad` command, but only if it is ours."""
+    tgt = cli_target()
+    bin_dir = cli_bin_dir()
+    dest = os.path.join(bin_dir, CLI_NAME)
+    if not os.path.lexists(dest):
+        print(f"  nothing to remove at {dest}")
+        return 0
+    ours = tgt and _is_our_command(dest, tgt)
+    if not ours:
+        print(f"  left alone: {dest} was not written by this install")
+        return 0
+    if dry:
+        print(f"  would remove: {dest}")
+        return 0
+    try:
+        os.unlink(dest)
+    except OSError as exc:
+        print(f"  could not remove {dest}: {exc}")
+        return 1
+    print(f"  removed {dest}")
+    return 0

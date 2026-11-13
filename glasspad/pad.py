@@ -189,18 +189,39 @@ def uinput_available(path: str = "/dev/uinput") -> bool:
 #: The state this program must never reach quietly: controls that draw, animate
 #: and light up under a finger while every press disappears into a rehearsal
 #: dummy. On screen the overlay is indistinguishable from a working one.
-NO_UINPUT_HINT = """GlassPad cannot write /dev/uinput, so there is no gamepad.
+def no_uinput_hint() -> str:
+    """The warning, naming a command the reader can actually run.
 
-The overlay still appears and the controls still respond -- to you. Nothing is
-sent anywhere, because the device that would carry it belongs to root and this
-account was never given permission to create one. This is not a bug to work
-around; it is one command, once, and it asks for a password:
+    It used to be a module constant ending in `glasspad --install-uinput`. For
+    somebody holding one downloaded AppImage there is no such command -- the file is
+    called something like GlassPad-1.1.0-x86_64.AppImage and bash does not search the
+    current directory -- so the sentence that appears exactly when something is wrong
+    was itself unfollowable, and the reader's next move was `command not found`.
+    bundle.cli_hint() resolves it to the AppImage path, the installed `glasspad`, or
+    `python3 -m glasspad`, whichever is true on this machine right now.
+    """
+    from glasspad import bundle
 
-    glasspad --install-uinput
+    hint = bundle.cli_hint()
+    return "\n".join([
+        "GlassPad cannot write /dev/uinput, so there is no gamepad.",
+        "",
+        "The overlay still appears and the controls still respond -- to you. "
+        "Nothing is",
+        "sent anywhere, because the device that would carry it belongs to root and "
+        "this",
+        "account was never given permission to create one. This is not a bug to "
+        "work",
+        "around; it is one command, once, and it asks for a password:",
+        "",
+        f"    {hint} --install-uinput",
+        "",
+        "Then log out and back in if that command says the group was newly added, "
+        "and",
+        f"confirm with:  {hint} --status",
+        "",
+    ])
 
-Then log out and back in if that command says the group was newly added, and
-confirm with:  glasspad --status
-"""
 
 
 def _warn_no_uinput() -> None:
@@ -210,7 +231,7 @@ def _warn_no_uinput() -> None:
     if _NO_UINPUT_WARNED:
         return
     _NO_UINPUT_WARNED = True
-    print(NO_UINPUT_HINT, file=sys.stderr, end="")
+    print(no_uinput_hint(), file=sys.stderr, end="")
 
 
 _NO_UINPUT_WARNED = False
@@ -234,7 +255,7 @@ class PadService:
         self._started = False
         self._disposed = False
         #: True when init() had to fall back to a null pad on its own. The
-        #: overlay shows this on screen; see NO_UINPUT_HINT.
+        #: overlay shows this on screen; see no_uinput_hint().
         self.fell_back_to_null = False
 
         self._buttons: set[str] = set()

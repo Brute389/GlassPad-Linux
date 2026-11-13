@@ -9,9 +9,14 @@ used to carry a list of modules to leave out of the payloads — a list is how y
 end up shipping a backend nobody tests. The code is in git history (before the
 orphan-code pass); reviving it means adding it back deliberately, not un-hiding it.
 
-Special modes, both of which work with no Wayland session running:
+Special modes -- none of them need a Wayland session running:
 
   --status          diagnose the overlay stack and exit (add --json for JSON).
+  --install         everything a first run needs, in one command (alias --setup):
+                    checks libgtk4-layer-shell, grants /dev/uinput (one password),
+                    then adds a menu entry and a `glasspad` command. --dry-run
+                    rehearses it without elevating or writing anything; --force lets
+                    it replace an existing `glasspad` on PATH.
   --install-uinput  grant /dev/uinput access -- one password, once. Run it the
                     first time, or any time --status says the device is not
                     writable. Without that access the controls draw, animate,
@@ -96,19 +101,12 @@ def take_backend(argv: list[str]) -> list[str]:
 
 
 
-LAYER_INSTALL_NOTE = """
-GlassPad's overlay needs libgtk4-layer-shell, and no Python package provides it -- it is
-a system library, and the one thing this bundle deliberately does not carry (a copy would
-have to match this machine's libwayland *and* GTK 4; when it does not you get a blank
-overlay rather than an error):
-
-    Arch / CachyOS   sudo pacman -S libgtk4-layer-shell
-    Debian / Ubuntu  sudo apt install libgtk4-layer-shell0
-    Fedora           sudo dnf install libgtk4-layer-shell
-
-Installed somewhere unusual? Say so, and --status will use it:
-    GLASSPAD_LAYER_SHELL=/path/to/libgtk4-layer-shell.so.0 glasspad --status
-"""
+# LAYER_INSTALL_NOTE used to be a hard-coded list of package names, and they were
+# all guesses. On Arch and CachyOS the package is gtk4-layer-shell; the note said
+# `libgtk4-layer-shell`, which matches no package in the repositories at all -- so
+# the first instruction a virgin user copy-pasted was one that cannot work.
+# bundle.dependency_hint() reads /etc/os-release instead, and labels which rows
+# have actually been verified.
 
 def report_status() -> int:
     """The layer backend's questions, in the order they fail.
@@ -134,7 +132,7 @@ def report_status() -> int:
     lib, why = bundle.layer_shell_path()
     print(f"layer-shell lib : {lib or 'NOT FOUND'}  (via {why})")
     if not lib:
-        print(LAYER_INSTALL_NOTE)
+        print(bundle.dependency_hint())
         return 1
 
     # Everything below needs the library to load and a display to ask. Each step is
@@ -209,10 +207,34 @@ def report_status() -> int:
     except Exception as exc:                                # noqa: BLE001
         print(f"profiles        : could not read ({type(exc).__name__}: {exc})")
 
+    # A report ends with the conclusion. Seven facts and no next step leaves the
+    # reading to whoever is already worried about their touchscreen, and this is the
+    # command they reach for precisely when something is wrong.
+    try:
+        from glasspad.desktop_entry import DESKTOP_NAME, data_home
+        desktop_installed = os.path.exists(
+            os.path.join(data_home(), "applications", DESKTOP_NAME))
+    except Exception:                                       # noqa: BLE001
+        desktop_installed = True        # never advise an install on a lookup failure
+    hint = bundle.cli_hint()
+    if not uinput_ok:
+        nxt = hint + " --install     (grants /dev/uinput, then adds the menu entry)"
+    elif not desktop_installed:
+        nxt = hint + " --install     (adds the menu entry and the `glasspad` command)"
+    else:
+        nxt = "nothing -- GlassPad is ready. Start it from the menu, or:  " + hint
+    print()
+    print(f"NEXT:           {nxt}")
+
     return rc
 
 def main(argv: list[str] | None = None) -> int:
     rest = take_backend(sys.argv[1:] if argv is None else list(argv))
+    if "--install" in rest or "--setup" in rest:
+        # First, and ahead of every session-dependent check: this is the command a
+        # person runs when the machine has never seen GlassPad, and it must work over
+        # ssh, from a display manager that has not started, and from a checkout.
+        return install_everything(rest)
     if "--install-uinput" in rest:
         # Checked before anything that cares about a session: this is how you fix
         # the machine so that the session-dependent code has something to report,
@@ -248,13 +270,14 @@ def main(argv: list[str] | None = None) -> int:
     if rest and rest[0] in ("--help", "-h"):
         print((__doc__ or "").strip())
         print(f"\nusage: glasspad [--status] [--edit] [--profile NAME] "
-              f"[--install-uinput] [--install-desktop] [--backend {BACKEND}]")
+              f"[--install] [--install-uinput] [--install-desktop] "
+              f"[--backend {BACKEND}]")
         print("  overlay_layer owns the remaining options; --help there lists them")
         return 0
     from glasspad.overlay_layer import main as run_layer
     code = run_layer(rest)
     if code:
-        sys.stderr.write(LAYER_INSTALL_NOTE)
+        sys.stderr.write(bundle.dependency_hint())
     return code
 
 
@@ -381,6 +404,73 @@ def _uinput_state_settling(samples: int = 12, delay: float = 0.25):
     return prev, moved
 
 
+def install_everything(argv: list[str] = ()) -> int:
+    """From "I downloaded one file" to a working overlay, in one command.
+
+    Three things stand between a fresh machine and a pad that reaches a game, and this
+    app can only do two of them:
+
+      1. libgtk4-layer-shell -- a system library that cannot be bundled, because a copy
+         has to match the host's libwayland AND GTK 4 and silently misleads when it
+         does not. Installing it means running somebody else's package manager on their
+         behalf, which is not this program's call to make. So step 1 checks and names.
+      2. /dev/uinput -- one password, and the only step that needs one.
+      3. menu entry plus a `glasspad` command -- no root, and what makes every other
+         message in this program a sentence the reader can actually follow.
+
+    Steps run in that order because that is the order their failures matter: with the
+    library missing, nothing else is worth asking the user for.
+    """
+    from glasspad import bundle, pad
+
+    dry = "--dry-run" in argv
+    force = "--force" in argv
+
+    print(f"GlassPad install{' -- dry run, nothing will change' if dry else ''}")
+    print("  1  libgtk4-layer-shell   checked here; your package manager installs it")
+    print("  2  /dev/uinput           one password")
+    print("  3  menu entry + `glasspad` command   no password")
+
+    blocked = []
+
+    lib, why = bundle.layer_shell_path()
+    if lib:
+        print(f"\n[1/3] library: {lib}\n      ({why})")
+    else:
+        print("\n[1/3] library: NOT FOUND")
+        print(bundle.dependency_hint())
+        print("      Everything else is pointless until this is installed, so stopping")
+        print("      here: there is no reason to ask for a password for an overlay that")
+        print("      cannot be drawn. Install the package and re-run this command.")
+        return 1
+
+    print("\n[2/3] /dev/uinput")
+    if pad.uinput_available():
+        print("      already writable -- nothing to grant.")
+    else:
+        rc = install_uinput(argv)
+        if rc != 0:
+            blocked.append("/dev/uinput")
+
+    print("\n[3/3] desktop integration")
+    from glasspad.desktop_entry import install_desktop
+    if install_desktop(dry=dry, force=force) != 0:
+        blocked.append("desktop entry")
+
+    hint = bundle.cli_hint()
+    print()
+    if blocked:
+        print("Not finished: " + ", ".join(blocked))
+        print(f"Sort that out, then run it again:  {hint} --install")
+        return 1
+    print("Done.")
+    print(f"Start GlassPad from the applications menu, or with:  {hint}")
+    print("Anything looks wrong later:  " + hint + " --status")
+    if dry:
+        print("(that was a rehearsal: no password was asked for and nothing was written)")
+    return 0
+
+
 def install_uinput(argv: list[str] = ()) -> int:
     """Grant /dev/uinput access from inside a bundle, with exactly one prompt.
 
@@ -494,7 +584,7 @@ def install_uinput(argv: list[str] = ()) -> int:
         print("This run added you to group `input`, and a process keeps the groups it")
         print("started with: membership lands at the NEXT login. Log out and back in,")
         print("then confirm with:")
-        print("    glasspad --status")
+        print(f"    {bundle.cli_hint()} --status")
         return 0
 
     print("\nInstalled -- but /dev/uinput is still not writable *for you*, and the")

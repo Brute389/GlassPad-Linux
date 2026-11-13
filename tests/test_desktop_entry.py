@@ -285,6 +285,71 @@ def test_the_entry_passes_the_desktop_file_validator():
               r.returncode == 0)
 
 
+def test_a_foreign_glasspad_on_path_is_never_the_launch_target():
+    """Any command by that name became Exec= for whichever tree asked.
+
+    This sat in launch_target() as a bare `shutil.which("glasspad")` until it was
+    demonstrated: install the CLI link on a real machine, then run --install-desktop
+    from a copied-out folder, and the folder stops refusing -- it writes a menu entry
+    that launches the OTHER GlassPad and exits 0. Two installs, one name, and the
+    entry silently belongs to whichever one PATH found first.
+    """
+    d = sandbox()
+    other = tempfile.mkdtemp()
+    bindir = os.path.join(other, "bin")
+    os.makedirs(bindir)
+    foreign = os.path.join(bindir, "glasspad")
+    with open(foreign, "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/sh\nexec /opt/some-other-build/glasspad \"$@\"\n")
+    os.chmod(foreign, 0o755)
+    try:
+        r = run_in(d, ["--install-desktop"],
+                   extra_env={"PATH": bindir + ":/usr/bin:/bin"})
+        check(f"still refuses rather than pointing at someone else (got {r.returncode})",
+              r.returncode == 2)
+        check("and says it ignored the command, and why",
+              "not this install" in r.stdout or "ignored" in r.stdout.lower())
+        check("naming the path it resolved to", foreign in r.stdout or other in r.stdout)
+        check("writes nothing", tree(os.path.join(d, ".local")) == set())
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+        shutil.rmtree(other, ignore_errors=True)
+
+
+def test_our_own_wrapper_on_path_is_accepted_for_that_tree():
+    """The exception has to work, or the rule is just a refusal with extra steps."""
+    d = sandbox()
+    other = tempfile.mkdtemp()
+    bindir = os.path.join(other, "bin")
+    os.makedirs(bindir)
+    ours = os.path.join(bindir, "glasspad")
+    with open(ours, "w", encoding="utf-8") as fh:
+        from glasspad import bundle
+        fh.write("#!/bin/sh\n" + bundle.LINK_MARKER + d + "\n"
+                 'exec python3 -m glasspad "$@"\n')
+    os.chmod(ours, 0o755)
+    try:
+        r = run_in(d, ["--install-desktop"],
+                   extra_env={"PATH": bindir + ":/usr/bin:/bin"})
+        check(f"accepted (got {r.returncode})", r.returncode == 0)
+        entry = os.path.join(d, ".local", "share", "applications", de.DESKTOP_NAME)
+        body = open(entry, encoding="utf-8").read() if os.path.exists(entry) else ""
+        # Group-aware: the entry legitimately carries a second Exec= inside
+        # [Desktop Action status], which is not the launch line.
+        main, in_main = [], True
+        for ln in body.splitlines():
+            if ln.startswith("["):
+                in_main = ln.strip() == "[Desktop Entry]"
+            elif in_main and ln.startswith("Exec="):
+                main.append(ln)
+        check(f"exactly one launch Exec= ({main})", len(main) == 1)
+        check(f"and it is the wrapper we wrote ({main[:1]})",
+              bool(main) and ours in main[0])
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+        shutil.rmtree(other, ignore_errors=True)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:
