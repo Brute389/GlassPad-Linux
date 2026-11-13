@@ -570,6 +570,18 @@ and [Stacking, and what this device is bound to](docs/NOTES.md#stacking-and-what
 
 ## Known limits
 
+The three that decide whether it works on *your* machine, before the detail:
+
+* **A game in exclusive fullscreen can cover the overlay.** The grab takes the screen from
+  the compositor, and a layer surface is not invited to that. Borderless/windowed is the
+  setting that works; if a game must be exclusive, give the overlay a keep-above window rule
+  ([Stacking: the overlay may need a window rule](docs/NOTES.md#stacking-the-overlay-may-need-a-window-rule)).
+* **A compositor must offer `zwlr_layer_shell_v1`.** KWin, Hyprland, Sway, wlroots: yes.
+  Stock GNOME: no, and no setting changes that.
+* **The `/dev/uinput` grant belongs to your login, not the program.** If the grant added you
+  to `input`, the pad cannot be created until the next login -- a process keeps the groups
+  it started with.
+
 `tools/probe_real_pad.py` is the only check that proves the device exists as the
 kernel sees it; it needs a writable `/dev/uinput`, so it cannot run in a
 container or on CI. There, every other check proves *logic* only — parsing,
