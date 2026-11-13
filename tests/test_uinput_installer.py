@@ -256,6 +256,22 @@ def test_the_input_group_disclosure_is_printed_where_it_is_decided():
         hout = (h.stdout + h.stderr).lower()
         check("--help carries the same warning", "read every keyboard" in hout)
 
+def test_the_new_flag_is_documented_where_it_is_parsed():
+    """--force-rule is accepted by the case statement, so the header block has to name it.
+
+    `--help` prints that block through awk, so an option added to the parser and not to
+    the header is invisible: legal to type, impossible to discover -- the same
+    advertised-and-absent class as --selftest, arriving from the opposite direction.
+    """
+    h = sh(["sh", os.path.join(ROOT, "install.sh"), "--help"], cwd=ROOT)
+    out = h.stdout + h.stderr
+    check(f"install.sh --help works (exit {h.returncode})", h.returncode == 0)
+    check("it documents --force-rule", "--force-rule" in out)
+    check("and says what skipping is for", "already" in out.lower())
+    for flag in ("--uinput", "--force-rule", "--check", "--user", "--dry-run",
+                 "--uninstall-uinput"):
+        check(f"the header still covers {flag}", flag in out)
+
 
 def test_invoking_user_comes_from_pkexec_uid():
     """pkexec sets only PKEXEC_UID; without this the wrong account joins `input`.
