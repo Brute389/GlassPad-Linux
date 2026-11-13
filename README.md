@@ -608,7 +608,7 @@ Current tallies here:
 
 | piece | tally |
 | --- | --- |
-| stdlib suites (25 files) | **311 passed** |
+| stdlib suites (25 files) | **315 passed** |
 | pytest-style suite, via `tools/run_tests.py` | **91 passed, 0 skipped** |
 | in-app self-test (`GLASSPAD_SELFTEST`: real hub, resize, rotation, profiles, turbo, licence reader) | **95 checks** |
 
