@@ -110,12 +110,13 @@ for doc in LICENSE licenses/THIRD-PARTY-NOTICES.txt; do
     [ -f "$doc" ] || { echo "  ERROR: $doc is missing; refusing to ship without it" >&2; exit 1; }
     cp "$doc" "$appdir/usr/share/doc/glasspad/$(basename "$doc")"
 done
-# The privileged half of the install, same reasoning as the licence texts above:
-# the bundle cannot ship /etc/udev/rules.d, so it ships the rule and the script
-# that writes it, and `glasspad --install-uinput` runs them through pkexec. On a
-# machine that has never had GlassPad this is the difference between "download one
-# file" and "download one file, then go find a source tree you do not have".
-for priv in install.sh packaging/glasspad-udev.rules; do
+# The udev rule, same reasoning as the licence texts above: the bundle cannot ship
+# /etc/udev/rules.d, so it ships the rule and the Python that writes it
+# (glasspad/uinput_setup.py, already inside the package copy), and
+# `glasspad --install-uinput` runs them through pkexec. On a machine that has never
+# had GlassPad this is the difference between "download one file" and "download one
+# file, then go find a source tree you do not have".
+for priv in packaging/glasspad-udev.rules; do
     [ -f "$priv" ] || { echo "  ERROR: $priv is missing; this bundle could not finish an install" >&2; exit 1; }
     mkdir -p "$appdir/usr/share/glasspad/$(dirname "$priv")"
     cp "$priv" "$appdir/usr/share/glasspad/$priv"
@@ -267,7 +268,8 @@ GlassPad $version, AppDir layout
 
   AppRun                      entry point; sets PYTHONPATH and execs python3 -m glasspad
   GlassPad.desktop            menu entry (validated with desktop-file-validate)
-  usr/share/glasspad/glasspad the Python package
+  usr/share/glasspad/glasspad the Python package, including glasspad/uinput_setup.py,
+                              the privileged half (stdlib only; staged and pkexec'd)
   usr/bin/glasspad-profile    the per-game profile claimer (a launcher calls this)
   usr/lib/                    empty on purpose -- see below
 

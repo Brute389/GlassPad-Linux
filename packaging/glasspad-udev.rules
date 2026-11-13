@@ -1,6 +1,7 @@
 # GlassPad -- permission to create a virtual gamepad through /dev/uinput.
 #
-# Installed to /etc/udev/rules.d/99-glasspad-uinput.rules by install.sh, which
+# Installed to /etc/udev/rules.d/99-glasspad-uinput.rules by
+# `glasspad --install-uinput` (glasspad/uinput_setup.py), which
 # copies this file verbatim rather than embedding a rule in a script. It is a
 # separate file so it can be read on its own and checked with:
 #
@@ -10,10 +11,10 @@
 # the device, mode 0660. It deliberately does NOT use 0666. A virtual Xbox 360
 # pad is, from the desktop's point of view, a keystroke-injecting device, and
 # 0666 would hand that to every user and every sandboxed application on the
-# machine. Being a member of `input` is therefore still required; install.sh
+# machine. Being a member of `input` is therefore still required; the grant step
 # adds the invoking user with usermod -aG input, and that takes effect at the
 # next login, not the current one.
 #
-# Removing this: `sudo ./install.sh --uninstall`, or delete the file and run
+# Removing this: `glasspad --uninstall-uinput`, or delete the file and run
 # `sudo udevadm control --reload-rules && sudo udevadm trigger`.
 KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"

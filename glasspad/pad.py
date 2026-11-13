@@ -309,16 +309,18 @@ class PadService:
             except _Abandoned:
                 pass
             except OSError as exc:
-                if exc.errno == errno.EACCES:
-                    on_status(
-                        "PadService error: no permission on /dev/uinput. "
-                        "Install the GlassPad udev rule, or run once with sudo."
-                    )
-                elif exc.errno == errno.ENOENT:
-                    on_status(
-                        "PadService error: /dev/uinput is missing. "
-                        "Load the uinput module (see install.sh)."
-                    )
+                if exc.errno in (errno.EACCES, errno.ENOENT):
+                    # Named by what this machine can actually run -- see
+                    # no_uinput_warning() for why these two lines used to be able to end
+                    # in "command not found". "run once with sudo" also went: running the
+                    # overlay as root does not grant anything and loses the session's
+                    # Wayland socket besides.
+                    from glasspad import bundle as _bundle
+
+                    what = ("no permission on /dev/uinput" if exc.errno == errno.EACCES
+                            else "/dev/uinput is missing: the module is not loaded")
+                    on_status(f"PadService error: {what}. One command, once: "
+                              f"{_bundle.cli_hint()} --install-uinput")
                 else:
                     on_status(f"PadService error: {exc}")
             except Exception as exc:  # noqa: BLE001 - status surface, as original

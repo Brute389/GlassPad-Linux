@@ -125,7 +125,7 @@ def report_status() -> int:
     from glasspad import bundle
 
     rc = 0
-    wayland = os.environ.get("WAYLAND_DISPLAY")  # noqa: E501 or os.environ.get("WAYLAND_SOCKET")
+    wayland = os.environ.get("WAYLAND_DISPLAY") or os.environ.get("WAYLAND_SOCKET")
     desktop = os.environ.get("XDG_CURRENT_DESKTOP") or "unknown"
     print(f"session         : {desktop}" + (f", socket {wayland}" if wayland else ""))
     if not wayland:
@@ -193,6 +193,20 @@ def report_status() -> int:
     print(f"/dev/uinput     : {uinput_why if uinput_ok else 'PROBLEM: ' + uinput_why}")
     if not uinput_ok:
         rc = 1
+
+    # The rest of the device chain, from the module that owns the policy. This is what
+    # `install.sh --check` used to answer, and --status is the only read-only command
+    # left: modules-load config, the rule, who can actually write the node, group
+    # membership. Guarded like everything else here -- a traceback from a diagnostic is
+    # worse than the bug you were chasing.
+    try:
+        from . import uinput_setup
+        for _label, _value in uinput_setup.status_rows(_target_user()):
+            print(f"{_label:<16}: {_value}")
+            if _label == "grant" and _value.startswith("NOT"):
+                rc = 1
+    except Exception as exc:                                # noqa: BLE001
+        print(f"{'grant':<16}: could not be checked -- {type(exc).__name__}: {exc}")
 
     try:
         from glasspad import layer_profiles as prof
@@ -291,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
         # overlay in answer to a setup request -- see --version below.
         return install_uinput(rest)
     if "--uninstall-uinput" in rest:
-        # Narrower than install.sh --uninstall on purpose; see install_uinput().
+        # Narrow on purpose: rule and modules file only; see install_uinput().
         return uninstall_uinput(rest)
     if "--install-desktop" in rest:
         # Also before the session check: a menu entry has nothing to do with a
@@ -346,13 +360,52 @@ def main(argv: list[str] | None = None) -> int:
     return code
 
 
+def _host_python() -> str:
+    """Which interpreter root should run the privileged script.
+
+    NOT sys.executable blindly: inside an AppImage that can name a binary inside the
+    payload, and root cannot open the payload -- the elevation would die before the
+    interpreter started, which is the exact failure the staging exists to prevent. So:
+    $PATH's python3, then /usr/bin/python3, then ourselves as a last resort.
+    """
+    import shutil
+
+    from . import bundle
+
+    for cand in (shutil.which("python3"), "/usr/bin/python3", sys.executable):
+        if cand and os.path.exists(cand) and not bundle._inside_bundle(cand):
+            return cand
+    return sys.executable
+
+
+def _target_user() -> str:
+    """The account that will actually run GlassPad.
+
+    pkexec sets only PKEXEC_UID and rewrites $USER to root, so the elevated side cannot
+    answer this -- which is how an installer once added root to `input` (root already has
+    it) and reported success on a machine whose real user was still locked out. The
+    unprivileged caller knows the answer, so it asks for it explicitly.
+    """
+    import pwd
+
+    for var in ("SUDO_USER", "USER", "LOGNAME"):
+        name = os.environ.get(var)
+        if name and name != "root":
+            return name
+    try:
+        return pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        return os.environ.get("USER") or "root"
+
+
 def uninstall_uinput(argv: list[str] = ()) -> int:
     """Take back the udev rule and the modules-load file, and report what that did.
 
-    Narrow on purpose. `install.sh --uninstall` also clears both install prefixes,
-    the autostart entry and `~/.config/GlassPad/layout.json` -- and someone removing
-    a device rule from a bundle has not asked for their button positions to be
-    deleted with it.
+    Narrow on purpose: the rule and the modules-load file, nothing else. Removing a
+    device rule is not a request to delete `~/.config/GlassPad/layout.json`, and the
+    desktop entry is a different command (`--uninstall-desktop`). Group membership is
+    left alone because `input` predates GlassPad on many machines and other devices
+    depend on it.
 
     The verdict is the part worth writing. On a machine with KDE Connect or Steam
     installed, `/dev/uinput` is still writable after the rule is gone, because both
@@ -366,12 +419,12 @@ def uninstall_uinput(argv: list[str] = ()) -> int:
 
     from . import bundle, pad
 
-    installer = bundle.find_installer()
-    if not installer:
-        print("This build ships no installer, so it cannot undo what one did.")
-        print("Looked for install.sh in:")
+    script = bundle.find_priv_script()
+    if not script:
+        print("This build ships no privileged script, so it cannot undo what one did.")
+        print("Looked for glasspad/uinput_setup.py in:")
         for root in bundle.installer_roots():
-            print(f"    {root}")
+            print(f"    {root}/glasspad")
         print("If you installed the rule by hand, remove it by hand:")
         print("    sudo rm /etc/udev/rules.d/99-glasspad-uinput.rules")
         print("    sudo rm /etc/modules-load.d/uinput.conf")
@@ -380,20 +433,21 @@ def uninstall_uinput(argv: list[str] = ()) -> int:
 
     tool = next((t for t in ("pkexec", "sudo") if shutil.which(t)), None)
     if tool is None:
-        print(f"Neither pkexec nor sudo is available. Run as root:")
-        print(f"    sh {installer} --uninstall-uinput")
+        print("Neither pkexec nor sudo is available. Run as root:")
+        print(f"    python3 {script} --uninstall-uinput")
         return 2
 
     dry = "--dry-run" in argv
     if dry:
-        print("(--dry-run: the installer will report and change nothing)")
-    with bundle.staged_installer(installer) as staged:
+        print("(--dry-run: the script will report and change nothing)")
+    with bundle.staged_priv(script) as (staged, _rule):
         if not staged:
-            print("the installer could not be copied somewhere root can read it")
+            print("the privileged script could not be copied somewhere root can read it")
             return 2
-        if staged != installer:
+        if staged != script:
             print(bundle.STAGED_NOTE)
-        cmd = (["sh"] if dry else [tool, "sh"]) + [staged, "--uninstall-uinput"]
+        cmd = ([tool] if not dry else []) + [_host_python(), staged,
+                                             "--uninstall-uinput"]
         if dry:
             cmd.append("--dry-run")
         sys.stdout.flush()                          # see the note in install_uinput
@@ -441,7 +495,7 @@ def _input_group_in_database() -> bool:
 def _uinput_state_settling(samples: int = 12, delay: float = 0.25):
     """Poll /dev/uinput until the answer stops moving. Returns (writable, moved).
 
-    udev applies rules asynchronously. install.sh settles the queue now, and this is
+    udev applies rules asynchronously. The grant step settles the queue, and this is
     the second half of the same lesson: report a stable reading rather than whichever
     sample happened first. A single reading is what made a successful install on real
     hardware announce "still not writable for you" about a device that udevd was
@@ -540,10 +594,11 @@ def install_uinput(argv: list[str] = ()) -> int:
     """Grant /dev/uinput access from inside a bundle, with exactly one prompt.
 
     This is the one step a bundle cannot sneak past: a virtual gamepad means an
-    entry in /etc/udev/rules.d and membership of a group, and both belong to
-    root. What a bundle CAN do -- and what until now required a source checkout,
-    which nobody who downloaded a single file has -- is carry the rule and the
-    installer that writes it, so that one download is a complete install.
+    entry in /etc/udev/rules.d and membership of a group, and both belong to root.
+    What a bundle CAN do is carry the rule and the script that writes it, so that
+    one download is a complete install -- which is why the privileged half is
+    Python inside the payload rather than a shell script someone must also down-
+    load, keep next to the AppImage, and run from the right directory.
 
     The check afterwards runs as *ourselves*, never as root: root can always
     write /dev/uinput, so a root-side verdict reports "writable" on a machine
@@ -554,29 +609,29 @@ def install_uinput(argv: list[str] = ()) -> int:
 
     from . import bundle, pad
 
-    installer = bundle.find_installer()
-    if not installer:
-        print("This build ships no installer, so it cannot grant uinput access.")
-        print("Looked for install.sh in:")
+    script = bundle.find_priv_script()
+    if not script:
+        print("This build ships no privileged script, so it cannot grant uinput access.")
+        print("Looked for glasspad/uinput_setup.py in:")
         for root in bundle.installer_roots():
-            print(f"    {root}")
-        print("Every GlassPad AppImage contains one; if yours does not, the download")
+            print(f"    {root}/glasspad")
+        print("Every GlassPad AppImage contains it; if yours does not, the download")
         print("was truncated.")
         return 2
 
-    rule = bundle.installer_rule_src(installer)
+    rule = bundle.priv_rule_src(script)
     if not rule:
-        print(f"Found the installer at {installer}")
-        print("...but not the rule it installs, expected at:")
-        print(f"    {os.path.join(os.path.dirname(installer), bundle.RULE_REL)}")
-        print("Refusing to invent a permission policy this bundle did not ship.")
+        print(f"Found the script at {script}")
+        print("...but not the udev rule it installs (expected next to it, or under")
+        print("  packaging/). Refusing to invent a permission policy this bundle did")
+        print("  not ship.")
         return 2
 
     tool = next((t for t in ("pkexec", "sudo") if shutil.which(t)), None)
     if tool is None:
         print("Neither pkexec nor sudo is available, so nothing under /etc can be")
-        print("written. Run the installer as root yourself:")
-        print(f"    sh {installer} --uinput")
+        print("written. Run the grant as root yourself:")
+        print('    python3 ' + script + ' --uinput --target-user "$USER"')
         return 2
 
     print("One password is needed. Everything below belongs to root:")
@@ -586,10 +641,10 @@ def install_uinput(argv: list[str] = ()) -> int:
     # Said before the prompt, not after the change. `input` owns every evdev node, so
     # membership reads every keyboard and touchpad on the machine; the write on
     # /dev/uinput is the part GlassPad needs and the read is attached to it. A grant
-    # this wide should be understood going in -- and the installer may not even make
-    # it, because it skips both when the node is already writable for you.
+    # this wide should be understood going in -- and the grant may not even happen,
+    # because it is skipped entirely when the node is already writable for you.
     print("Note: `input` membership can also READ every keyboard, mouse and touchpad")
-    print("on this machine. That is wider than this app needs; the installer skips the")
+    print("on this machine. That is wider than this app needs; the grant is skipped")
     print("rule and the group entirely if /dev/uinput is already writable for you.")
     print()
     print("The exact rule being installed is this file, which you can read first:")
@@ -604,34 +659,36 @@ def install_uinput(argv: list[str] = ()) -> int:
     # change to /etc.
     dry = "--dry-run" in argv
     if dry:
-        print("(--dry-run: the installer will report and change nothing)")
+        print("(--dry-run: the script will report and change nothing)")
     # Recorded so the verdict afterwards can say whether THIS run is what changed
     # group membership, instead of suggesting a re-login that cannot help.
     groups_before = None if dry else _input_group_in_database()
-    # No privilege elevation at all for a dry run: install.sh --uinput --dry-run is
-    # safe unprivileged, and asking for a password to read a plan is absurd.
+    # No privilege elevation at all for a dry run: --uinput --dry-run is safe
+    # unprivileged, and asking for a password to read a plan is absurd.
     #
-    # staged_installer() is not decoration. Inside an AppImage this script lives on a
-    # FUSE mount that only the mounting user may read, so pkexec used to fail with
-    # EACCES on the open() -- found on a real virgin install, and invisible to every
-    # dry run, because a dry run does not elevate and so reads the file as the user
-    # who IS allowed to read it.
-    with bundle.staged_installer(installer) as staged:
+    # staged_priv() is not decoration. Inside an AppImage both files live on a FUSE
+    # mount that only the mounting user may read, so pkexec used to fail with EACCES
+    # on the open() -- found on a real virgin install, and invisible to every dry run,
+    # because a dry run does not elevate and so reads them as the user who IS allowed
+    # to. The rule is staged NEXT TO the script because that is where it looks.
+    with bundle.staged_priv(script, rule) as (staged, _staged_rule):
         if not staged:
-            print("the installer could not be copied somewhere root can read it")
+            print("the privileged script could not be copied somewhere root can read it")
             return 2
-        if staged != installer:
+        if staged != script:
             print(bundle.STAGED_NOTE)
-        cmd = (["sh"] if dry else [tool, "sh"]) + [staged, "--uinput"]
+        cmd = ([tool] if not dry else []) + [_host_python(), staged, "--uinput",
+                                             "--target-user", _target_user(),
+                                             "--cli-hint", bundle.cli_hint()]
         if dry:
             cmd.append("--dry-run")
         if "--force-rule" in argv:
             # Passed through rather than honoured here, because the decision lives in
-            # one place: install.sh decides whether a rule is needed, and --status
+            # one place: uinput_setup decides whether a rule is needed, and --status
             # reads the same verdict. A flag this file swallowed would be a flag the
             # help advertises and the install ignores.
             cmd.append("--force-rule")
-        # Flush before spawning: install.sh writes straight to the same fd, and when
+        # Flush before spawning: the script writes straight to the same fd, and when
         # stdout is a pipe or a file the parent block-buffers -- so a logged run reads
         # as though the installer had already run and only then been explained. In a
         # terminal Python line-buffers and the order looks fine, which is exactly why
@@ -645,7 +702,7 @@ def install_uinput(argv: list[str] = ()) -> int:
         print(f"\nAuthorisation declined ({tool} exit 125); nothing was changed.")
         return 1
     if rc != 0:
-        # Measure before agreeing that it failed. On real hardware the installer's exit
+        # Measure before agreeing that it failed. On real hardware the script's exit
         # status contradicted its own sentence three lines above:
         #
         #     writable by josh: GlassPad can create a pad now.
@@ -658,13 +715,13 @@ def install_uinput(argv: list[str] = ()) -> int:
         # the claim gets checked rather than believed.
         settled, _moved = _uinput_state_settling()
         if settled:
-            print(f"\nThe installer exited {rc}, but /dev/uinput IS writable now:")
+            print(f"\nThe grant step exited {rc}, but /dev/uinput IS writable now:")
             print("its status line is wrong, not its work. The grant landed -- confirm")
             print(f"with:  {bundle.cli_hint()} --status")
             print("(please report that exit code regardless: a tool that fails loudly")
             print(" while succeeding is worse than one that is honest about which)")
             return 0
-        print(f"\nThe installer failed with exit {rc}; read its output above.")
+        print(f"\nThe grant step failed with exit {rc}; read its output above.")
         print("GlassPad never started, so there is no half-configured state to untangle.")
         return rc
 

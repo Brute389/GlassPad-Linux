@@ -8,7 +8,9 @@ on purpose the test says so.
 """
 from __future__ import annotations
 
+import contextlib
 import fcntl
+import io
 import json
 import math
 import os
@@ -307,7 +309,17 @@ class TestPadService:
         messages = []
         pad = PadService()
         pad.init(messages.append, synchronous=True)
-        assert any("udev" in m for m in messages), messages
+        # The message has to be FOLLOWABLE, not merely about a subsystem. It used to
+        # read "Install the GlassPad udev rule, or run once with sudo" -- which named a
+        # kernel feature instead of a command, and the command it named grants nothing
+        # (running the overlay as root loses the session's Wayland socket along with
+        # everything else), so the useful half of the sentence was the wrong half.
+        joined = " ".join(messages)
+        assert "--install-uinput" in joined, messages
+        assert "/dev/uinput" in joined, messages
+        assert "sudo" not in joined, (
+            "the bad advice is back: the grant is one command as the ordinary user\n"
+            + joined)
         assert pad.backend is None
         pad.dispose()
 
@@ -627,201 +639,189 @@ _REAL_X_SOCKET_DIR = "/tmp/.X11-unix"
 # ---------------------------------------------------------------------------
 # Installer and verification tools
 #
-# The port's own tooling has shipped two bugs that only a real desktop exposes:
-# an installer that aborted after doing everything right, and a watcher whose
-# documented invocation could not start. Both are reproduced here rather than
-# merely reasoned about, because neither shows up in --status or a unit test.
+# The port's own tooling has shipped bugs that only a real desktop exposes: an
+# installer that aborted after doing everything right, and a watcher whose documented
+# invocation could not start. Both are reproduced here rather than merely reasoned about,
+# because neither shows up in --status or a unit test.
+#
+# These used to drive install.sh by sourcing its functions up to the dispatch `case`.
+# install.sh is gone -- the install is one AppImage, and the privileged half is
+# glasspad/uinput_setup.py -- so what is asserted below is the BEHAVIOUR, not the
+# plumbing. The properties came from real failures and none of them stopped being true
+# when the shell did:
+#
+#   * a cache refresher that disagrees never aborts an install or an uninstall;
+#   * a theme that cannot be refreshed is skipped rather than attempted, so
+#     "No theme index file." never reaches someone who just succeeded;
+#   * a theme that CAN be refreshed still is, rather than the guard becoming "never";
+#   * the privileged script documents every mode it accepts.
 # ---------------------------------------------------------------------------
 class TestInstallerRobustness:
     ROOT = pathlib.Path(__file__).resolve().parent.parent
 
     @staticmethod
-    def _functions(workdir: pathlib.Path) -> pathlib.Path:
-        """install.sh up to its dispatch `case`, so functions can be sourced.
+    def _stub_icon_cache(work: pathlib.Path, always_fail: bool = False) -> pathlib.Path:
+        """A gtk-update-icon-cache that behaves like the real one and leaves evidence.
 
-        Extracted rather than re-implemented: a test of a hand-copied function
-        would keep passing while the shipped one stayed fatal.
+        Default reproduces what the real tool prints for a hicolor directory with no
+        usable cache -- "No theme index file." and exit 1 -- which is the state a first
+        install into a fresh account creates. With a cache present it succeeds. The
+        always-fail variant fails for a reason no guard can foresee (a read-only or
+        corrupt cache, say) even against a perfectly good theme; only the non-fatal call
+        covers that.
+
+        Every invocation is appended to work/calls.log, because "the guard skipped it"
+        and "the guard never ran" look identical from the program's output alone.
         """
-        text = (TestInstallerRobustness.ROOT / "install.sh").read_text()
-        marker = 'case "$MODE" in'
-        head = text.split(marker, 1)[0]
-        assert "refresh_caches()" in head, "install.sh changed shape; update me"
-        out = workdir / "functions.sh"
-        out.write_text(head)
-        return out
-
-    @staticmethod
-    def _stub_icon_cache(workdir: pathlib.Path, always_fail: bool = False
-                         ) -> pathlib.Path:
-        """A gtk-update-icon-cache behaving like the real one.
-
-        Default reproduces what the real tool prints for a hicolor directory
-        without index.theme -- "No theme index file." and exit 1 -- which is the
-        state a first install into /usr/local creates. With a valid index.theme
-        it succeeds, so the "still refreshed" test proves real work happens.
-
-        always_fail instead fails unconditionally, for a reason the index.theme
-        guard cannot foresee (a read-only or corrupt cache, say), even when the
-        theme is perfectly good. Only the non-fatal run_soft call can cover that.
-        """
-        bindir = workdir / "bin"
+        bindir = work / "bin"
         bindir.mkdir(parents=True, exist_ok=True)
         stub = bindir / "gtk-update-icon-cache"
+        log = work / "calls.log"
         if always_fail:
-            script = (
-                '#!/bin/sh\n'
-                'echo "stub: cannot write cache" >&2\n'
-                'exit 1\n'
-            )
+            body = f'echo "stub: cannot write cache" >&2; echo "$0 $*" >> {log}; exit 1'
         else:
-            script = (
-                '#!/bin/sh\n'
-                '[ "$1" = "-q" ] && shift\n'
-                'target="$1"\n'
-                'if [ ! -f "$target/index.theme" ]; then\n'
-                '  echo "gtk-update-icon-cache: No theme index file." >&2\n'
-                '  exit 1\n'
-                'fi\n'
-                'echo "stub: updated $target"\n'
-            )
-        stub.write_text(script)
+            body = (f'echo "$0 $*" >> {log}\n'
+                    'target=""\n'
+                    'for a in "$@"; do target="$a"; done\n'
+                    'if [ ! -f "$target/icon-theme.cache" ]; then\n'
+                    '  echo "gtk-update-icon-cache: No theme index file." >&2\n'
+                    '  exit 1\n'
+                    'fi\n'
+                    'echo "stub: updated $target"')
+        stub.write_text("#!/bin/sh\n" + body + "\n")
         stub.chmod(0o755)
         return bindir
 
-    def _drive_refresh(self, tmp_path, index_theme: bool, always_fail: bool = False):
-        work = tmp_path / "work"
-        work.mkdir()
-        prefix = work / "prefix"
-        (prefix / "share" / "applications").mkdir(parents=True)
-        # Names chosen so the levels cannot be confused: `theme` is the hicolor
-        # directory the refresher is pointed at, `sizes` is a subdir inside it.
-        theme = prefix / "share" / "icons" / "hicolor"
-        sizes = theme / "256x256" / "apps"
-        sizes.mkdir(parents=True)
-        if index_theme:
-            # index.theme belongs to hicolor itself. Anywhere else leaves the
-            # theme bare, and the "still refreshed" assertion below would then
-            # pass for the wrong reason -- or, before the fix, fail the install.
-            (theme / "index.theme").write_text(
-                "[Icon Theme]\nDirectories=256x256/apps\n")
-        funcs = self._functions(work)
-        driver = work / "drive.sh"
-        driver.write_text(
-            "#!/bin/sh\nset -eu\n"
-            f"DRY=0\n. {funcs}\nrefresh_caches \"$TARGET\"\nsay REACHED_END\n")
-        bindir = self._stub_icon_cache(work, always_fail=always_fail)
-        env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}",
-                   TARGET=str(prefix))
-        return subprocess.run(["/bin/sh", str(driver)], env=env,
-                              capture_output=True, text=True)
+    def _drive(self, tmp_path, monkeypatch, *, cache: bool, always_fail: bool = False,
+               action: str = "install"):
+        """Run the real install/uninstall against a throwaway $XDG_DATA_HOME.
 
-    def test_icon_cache_failure_does_not_abort_the_install(self, tmp_path):
+        Idempotent on purpose: the uninstall test drives this twice against the SAME
+        $XDG_DATA_HOME, because an uninstall that looks in a different directory from the
+        install is uninstalling nothing. The evidence log is per call, and the cache file
+        is set to the requested state every time -- leaving it over from the first call
+        would test the first call's filesystem instead of the second's.
+        """
+        from glasspad import desktop_entry
+
+        work = tmp_path / "work"
+        work.mkdir(exist_ok=True)
+        (work / "calls.log").unlink(missing_ok=True)
+        base = work / "share"
+        (base / "applications").mkdir(parents=True, exist_ok=True)
+        theme = base / "icons" / "hicolor"
+        (theme / "256x256" / "apps").mkdir(parents=True, exist_ok=True)
+        if cache:
+            # The presence of icon-theme.cache is the guard: refresh where a cache
+            # already exists, and never create one that the account did not have.
+            (theme / "icon-theme.cache").write_bytes(b"stub cache")
+        else:
+            (theme / "icon-theme.cache").unlink(missing_ok=True)
+        bindir = self._stub_icon_cache(work, always_fail=always_fail)
+        monkeypatch.setenv("XDG_DATA_HOME", str(base))
+        monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+        out = io.StringIO()
+        fn = desktop_entry.install_desktop if action == "install" \
+            else desktop_entry.uninstall_desktop
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = fn()
+        calls = (work / "calls.log").read_text() if (work / "calls.log").exists() else ""
+        return code, out.getvalue(), calls
+
+    def test_icon_cache_failure_does_not_abort_the_install(self, tmp_path, monkeypatch):
         """Regression: the first install into /usr/local died after finishing.
 
-        Under `set -eu` a non-zero gtk-update-icon-cache killed the installer
-        between writing the files and reporting them, so a fully installed system
-        exited 1, never printed "wrote ... glasspad.desktop" or "done.", and
-        `sudo ./install.sh && ./install.sh --check` stopped before the check.
+        Under `set -eu` a non-zero gtk-update-icon-cache killed the installer between
+        writing the files and reporting them, so a fully installed system exited 1 and
+        `install && check` stopped before the check. The same shape is fatal in Python
+        if the refresher is called without its guard, so the exit code is asserted, not
+        assumed.
         """
-        result = self._drive_refresh(tmp_path, index_theme=False)
-        assert result.returncode == 0, (
-            "refresh_caches aborted the run; install.sh would exit mid-install\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}")
-        assert "REACHED_END" in result.stdout
+        code, out, calls = self._drive(tmp_path, monkeypatch, cache=True,
+                                       always_fail=True)
+        assert code == 0, (
+            "a cache refresh was fatal to the install\n" + out)
+        assert calls.strip(), "the refresher was never reached, so this proves nothing"
 
-    def test_a_bare_theme_is_skipped_without_printing_an_error(self, tmp_path):
+    def test_a_theme_without_a_cache_is_skipped_not_attempted(self, tmp_path,
+                                                              monkeypatch):
         """A first install must not print something that reads like a failure.
 
-        "gtk-update-icon-cache: No theme index file." on stderr is what made a
-        completed install look broken, and skipping rather than attempting-and-
-        tolerating is what removes it: hicolor is the mandated fallback theme and
-        is searched as-is with no cache, so the attempt had no upside to trade off.
+        "gtk-update-icon-cache: No theme index file." on stderr is what made a completed
+        install look broken. Skipping rather than attempting-and-tolerating is what
+        removes it, and it costs nothing: hicolor is the mandated fallback theme and is
+        searched as-is with no cache. Creating one in an account that had none is a
+        separate offence -- same class as the MIME caches this installer also declines to
+        mint.
         """
-        result = self._drive_refresh(tmp_path, index_theme=False)
-        assert result.returncode == 0
-        assert "No theme index file" not in result.stderr, (
-            "the refresher was attempted against a theme that cannot succeed, "
-            "so its error still reaches the user\n"
-            f"stderr: {result.stderr}")
+        code, out, calls = self._drive(tmp_path, monkeypatch, cache=False)
+        assert code == 0, out
+        assert calls == "", (
+            "the refresher was attempted against a theme that cannot use a cache\n"
+            + out)
+        assert "No theme index file" not in out, out
 
-    def test_a_theme_with_an_index_is_still_refreshed(self, tmp_path):
-        """The fix must skip the bare theme, not all refreshes."""
-        result = self._drive_refresh(tmp_path, index_theme=True)
+    def test_a_theme_with_a_cache_is_still_refreshed(self, tmp_path, monkeypatch):
+        """The guard must skip the bare theme, not all refreshes."""
+        code, out, calls = self._drive(tmp_path, monkeypatch, cache=True)
+        assert code == 0, out
+        assert calls.strip(), "gtk-update-icon-cache was never invoked where it would work"
+        assert "refreshed" in out.lower(), (
+            "it refreshed the cache without saying so: silence is how a stale icon gets "
+            "blamed on the icon\n" + out)
+
+    def test_any_refresher_failure_stays_advisory(self, tmp_path, monkeypatch):
+        """The guard only foresees a missing cache; failures are not bounded.
+
+        A read-only or corrupt cache fails against a perfectly good theme, so no guard
+        helps there and only the non-fatal call does. Pinned independently so the two
+        halves cannot be traded for one another.
+        """
+        code, out, calls = self._drive(tmp_path, monkeypatch, cache=True,
+                                       always_fail=True)
+        assert code == 0, (
+            "an advisory cache refresh was fatal to the install\n" + out)
+        assert calls.strip(), "the stub was never reached; this test would pass on nothing"
+
+    def test_uninstall_is_not_derailed_by_a_cache_refresher(self, tmp_path, monkeypatch):
+        """The dangerous twin: an abort mid-uninstall leaves a half-removed state.
+
+        install.sh's remove_prefix() ran before its udevadm reload, so dying there left
+        the layout, the autostart entry and the live device permissions in three different
+        places at once. The Python uninstall is deliberately split -- the menu entry is
+        one command, the device rule another -- so no single refresher can strand the
+        other half. What remains testable, and is asserted, is that a hostile refresher
+        cannot stop the entry from being removed.
+        """
+        install_code, install_out, _ = self._drive(tmp_path, monkeypatch, cache=True)
+        assert install_code == 0, install_out
+        entry = (tmp_path / "work" / "share" / "applications")
+        before = sorted(q.name for q in entry.glob("*.desktop"))
+        assert before, f"nothing was installed to uninstall; got {before}"
+        code, out, calls = self._drive(tmp_path, monkeypatch, cache=True,
+                                       always_fail=True, action="uninstall")
+        assert code == 0, "uninstall aborted; a menu entry is now stranded\n" + out
+        after = sorted(q.name for q in entry.glob("*.desktop")
+                       if q.name in before)
+        assert not after, f"these entries survived an uninstall: {after}"
+
+    def test_privileged_script_documents_every_mode_it_accepts(self):
+        """`--help` is the only contract for a script root runs on a stranger's machine.
+
+        The shell installer's usage text was sliced out of its header by line number, and
+        drifted. This one is argparse, so the risk is the opposite: a mode added to the
+        parser that the help renders but nothing else reaches, or a flag whose name changed
+        while the prose around it stayed. Every option in the parser is compared against
+        the flags this repository actually tells people to type.
+        """
+        result = subprocess.run(
+            [sys.executable, str(self.ROOT / "glasspad" / "uinput_setup.py"), "--help"],
+            capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
-        assert "stub: updated" in result.stdout, \
-            "gtk-update-icon-cache was never invoked where it would work"
-        assert "REACHED_END" in result.stdout
-
-    def test_any_refresher_failure_stays_advisory(self, tmp_path):
-        """The guard only foresees a missing index.theme; failures are not bounded.
-
-        A read-only or corrupt cache fails against a perfectly good theme, so the
-        skip guard cannot help and only the non-fatal call can. This pins that
-        half of the fix independently: without it, install.sh regresses to dying
-        on the first advisory command that disagrees, for reasons nobody predicted.
-        """
-        result = self._drive_refresh(tmp_path, index_theme=True, always_fail=True)
-        assert result.returncode == 0, (
-            "an advisory cache refresh was fatal to the install\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}")
-        assert "REACHED_END" in result.stdout
-        assert "WARNING" in result.stdout, \
-            "the failure was swallowed silently instead of reported"
-
-    def _drive_remove_prefix(self, tmp_path):
-        """Run the real remove_prefix() against a throwaway install root.
-
-        Scoped to one prefix on purpose: uninstall() itself reaches /etc and the
-        real home directory, which a test has no business touching.
-        """
-        work = tmp_path / "work"
-        work.mkdir()
-        prefix = work / "prefix"
-        for sub in ("share/applications", "share/icons/hicolor/256x256/apps",
-                    "share/icons/hicolor/512x512/apps"):
-            (prefix / sub).mkdir(parents=True)
-        # A valid index.theme, so the guard lets the refresher run and the
-        # always-failing stub is actually reached. Without it the guard skips the
-        # call, nothing fails, and this test would pass even with the fatal bug
-        # restored -- a assertion that cannot fail is worse than no assertion.
-        (prefix / "share" / "icons" / "hicolor" / "index.theme").write_text(
-            "[Icon Theme]\nDirectories=256x256/apps,512x512/apps\n")
-        funcs = self._functions(work)
-        driver = work / "drive.sh"
-        driver.write_text(
-            "#!/bin/sh\nset -eu\n"
-            f"DRY=0\n. {funcs}\nremove_prefix \"$TARGET\"\nsay REACHED_END\n")
-        bindir = self._stub_icon_cache(work, always_fail=True)
-        env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}",
-                   TARGET=str(prefix))
-        return subprocess.run(["/bin/sh", str(driver)], env=env,
-                              capture_output=True, text=True)
-
-    def test_uninstall_is_not_derailed_by_a_cache_refresher(self, tmp_path):
-        """remove_prefix is where uninstall called refresh_caches, fatally.
-
-        This is the dangerous twin of the install bug. remove_prefix runs before
-        the udevadm reload at the end of uninstall(), so an abort there left the
-        autostart entry, the saved layout and the deleted udev rule's permissions
-        on the live /dev/uinput -- precisely the half-removed state run_ok() was
-        written to prevent, reintroduced through a path that bypassed it.
-        """
-        result = self._drive_remove_prefix(tmp_path)
-        assert result.returncode == 0, (
-            "remove_prefix aborted; uninstall() would stop before reverting "
-            "udev\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}")
-        assert "REACHED_END" in result.stdout
-
-    def test_installer_still_parses_and_documents_itself(self):
-        """The -h text is sliced from the header by line number; keep it whole."""
-        result = subprocess.run(["/bin/sh", str(self.ROOT / "install.sh"), "-h"],
-                                capture_output=True, text=True)
-        assert result.returncode == 0
-        assert "--uninstall" in result.stdout
-        assert result.stdout.rstrip().endswith("skips the /etc work entirely."), \
-            "usage text is truncated; the header grew past the sed range"
-
+        for flag in ("--uinput", "--uninstall-uinput", "--check", "--dry-run",
+                     "--force-rule", "--target-user"):
+            assert flag in result.stdout, (
+                f"{flag} is accepted by the front end but missing from --help")
 
 class TestUinputWatcher:
     """tools/uinput_watch.py is the only check that no virtual pad leaked.
@@ -894,15 +894,19 @@ class TestDocPointers:
 
     ROOT = pathlib.Path(__file__).resolve().parent.parent
     SHIPPED = (sorted((ROOT / "glasspad").glob("*.py"))
-               + [ROOT / "install.sh", ROOT / "desktop" / "glasspad.desktop.in"])
+               + sorted((ROOT / "tools").glob("*.py"))
+               + [ROOT / "packaging" / "glasspad-udev.rules",
+                  ROOT / "desktop" / "glasspad.desktop.in",
+                  ROOT / "tools" / "glasspad-profile"])
     # A bare filename resolves relative to the package or the repo root, which
-    # is where install.sh and the license texts actually live. tests/ belongs here
+    # is where the license texts and the udev rule actually live, and tools/
+    # because shipped comments cite the probes they were measured with. tests/ belongs here
     # too: shipped comments cite the suite that enforces an invariant ("which is
     # what test_orphan_constants.py caught"), and a pointer to the check that will
     # fire is the most useful kind of pointer there is. It should resolve, not be
     # exempted.
     LOOKUP = (ROOT / "glasspad", ROOT / "desktop", ROOT / "licenses",
-              ROOT / "tests", ROOT)
+              ROOT / "tests", ROOT / "tools", ROOT / "packaging", ROOT)
     # Written at runtime in the user's own directories, never shipped and never expected
     # in this tree: layout.json in ~/.config/GlassPad, and the menu entries that live in
     # ~/.local/share/applications -- ours AND a manager's. Shelly writes our application's
@@ -984,10 +988,10 @@ class TestDocPointers:
         # A scan that reads nothing would pass forever, so exercise the pattern
         # and the lookup on samples instead of on whichever mentions happen to
         # survive in the tree today.
-        sample = ("see README.md and NOTES.md, run install.sh, load "
+        sample = ("see README.md and NOTES.md, run uinput_setup.py, load "
                   "layout.json, uses layer_geom.py, not .md alone")
         assert set(self.NAMED.findall(sample)) == {
-            "README.md", "NOTES.md", "install.sh", "layout.json",
+            "README.md", "NOTES.md", "uinput_setup.py", "layout.json",
             "layer_geom.py"}
         # The lookup is what separates a real pointer from a dead one.
         assert self._resolves("layer_geom.py")
@@ -1032,8 +1036,10 @@ class TestDocPointers:
         assert (self.ROOT / "glasspad/layer_geom.py").is_file()
         assert not (self.ROOT / "glasspad/no_such_module.py").is_file()
         # A path inside the bundle is not a path in the tree, and the lookbehind is
-        # what keeps usr/share/glasspad/install.sh from being read as repo prose.
-        assert not self.QUALIFIED.findall("packed at usr/share/glasspad/install.sh")
+        # what keeps usr/share/glasspad/glasspad/uinput_setup.py, a path inside the
+        # bundle, from being read as repo prose.
+        assert not self.QUALIFIED.findall(
+            "packed at usr/share/glasspad/glasspad/uinput_setup.py")
 
     ENVVAR = re.compile(r"\bGLASSPAD_[A-Z][A-Z0-9_]*\b")
 
@@ -1453,5 +1459,12 @@ TRIMMED_TOOLS = frozenset({
 # Dropped as documentation-adjacent bulk; tests/test_glasspad.py still mentions it
 # in a comment about where to bump the version alongside.
 TRIMMED_DOCS = frozenset({"CHANGELOG.md"})
+# The shell installer, deleted when the project committed to one AppImage. Prose in
+# __main__.py and glasspad/uinput_setup.py still explains decisions by reference to it --
+# "install.sh used to own this reporting" is the reason --status and --check now share one
+# rendering, and cutting the name would cut the reasoning away with it. Citable, not
+# resolvable: the same arrangement as the deleted Qt modules and probe scripts.
+TRIMMED_INSTALLER = frozenset({"install.sh"})
 
-TestDocPointers.HISTORICAL = frozenset(_GONE) | TRIMMED_TOOLS | TRIMMED_DOCS
+TestDocPointers.HISTORICAL = (frozenset(_GONE) | TRIMMED_TOOLS | TRIMMED_DOCS
+                              | TRIMMED_INSTALLER)

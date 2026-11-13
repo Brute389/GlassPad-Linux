@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not os.access(args.path, os.W_OK):
         print(f"FAIL  {args.path} is not writable by you")
-        print("      run: sudo ./install.sh, then log out and back in")
+        print("      run: glasspad --install-uinput, then log out and back in")
         # One gr_name lookup failure (an id with no /etc/group entry, common in
         # containers) must not sink the diagnostic this line exists to print.
         try:

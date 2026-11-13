@@ -8,7 +8,7 @@ wrong for an AppImage, whose payload is a FUSE mount at `/tmp/.mount_*` that sto
 existing the moment the app exits -- the menu would show a broken icon within
 seconds, which is a worse first run than having no entry at all.
 
-So the icon goes where install.sh puts it, into the user's icon theme, and `Icon=`
+So the icon goes where `--install-desktop` puts it, into the user's icon theme, and `Icon=`
 names it for theme lookup instead of hardcoding a path. The entry itself is the
 `.run`'s, improvements included:
 
@@ -36,7 +36,7 @@ DESKTOP_NAME = "org.glasspad.GlassPad.desktop"
 # Shelly's file "ours": install wrote a second entry, and --uninstall-desktop would have
 # deleted the manager's entry from under its own metadata database. See entry_owner().
 MARKER_KEY = "X-GlassPad-Installer"
-# The name install.sh writes for a per-user install. Uninstall removes both,
+# The name a per-user install writes. Uninstall removes both,
 # because "take the menu entry away" means that whatever is in the menu, not
 # whichever of the two installers happens to have put it there.
 LEGACY_NAMES = ("glasspad.desktop",)
@@ -61,7 +61,7 @@ def launch_target(env=None) -> tuple[str | None, str]:
     The other cases are separated by evidence rather than by hope. "There is a
     glasspad package next to me" proves nothing about how it gets launched -- that
     is true of an installed copy, a copied-out tree, and this source file alike --
-    so a checkout has to look like a tree the user holds (install.sh or README.md
+    so a checkout has to look like a tree the user holds (README.md and LICENSE
     beside the package), and an installed copy has to be in site-packages, where
     `python -m glasspad` genuinely finds it with nothing inherited from a shell.
     Anything else is refused: an entry that cannot launch is worse than none,
@@ -78,8 +78,7 @@ def launch_target(env=None) -> tuple[str | None, str]:
     py = sys.executable or shutil.which("python3")
     runnable = os.path.isfile(os.path.join(here, "__main__.py"))
 
-    if runnable and py and (os.path.isfile(os.path.join(root, "install.sh"))
-                            or os.path.isfile(os.path.join(root, "README.md"))):
+    if runnable and py and os.path.isfile(os.path.join(root, "README.md")):
         # `python -m glasspad` resolves the package from the working directory,
         # which is what the `Path=` key sets below, so no PYTHONPATH is needed.
         return f"{py} -m glasspad", f"the checkout at {root}"

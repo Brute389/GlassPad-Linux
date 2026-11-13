@@ -61,20 +61,30 @@ list the artefact tests refuse to ship.
 
 ## Install
 
-Two shapes of install, and only one of them is for a downloaded file. Holding
-`GlassPad-1.1.0-x86_64.AppImage`? Skip to
-[first run on a machine that has never had GlassPad](#first-run-on-a-machine-that-has-never-had-glasspad).
-`install.sh` is the same work done from a source checkout.
+There is one install, and it is the AppImage. Everything a file can do by itself it does
+by itself; the one step that needs a password is *inside* the file rather than beside it,
+so there is nothing to download twice and no directory to keep the parts in.
 
 ```bash
-sudo ./install.sh          # uinput module + udev rule + icons + desktop entry
-newgrp input               # or log out and back in — group membership is needed
-./install.sh --check       # report state, change nothing
+chmod +x GlassPad-1.1.0-x86_64.AppImage
+./GlassPad-1.1.0-x86_64.AppImage --install-desktop    # menu entry + icon; no root
+./GlassPad-1.1.0-x86_64.AppImage --install-uinput     # one password, once -- read what it prints
+./GlassPad-1.1.0-x86_64.AppImage                      # the overlay
 ```
 
-Other modes: `--user` (desktop entry + icons into `~/.local`, no root, no `/etc`
-writes), `--autostart`, `--dry-run`, `--uninstall`, and `--uinput`, which does the
-privileged half alone — that is the mode a bundle runs.
+From a checkout, the same commands are `python3 -m glasspad --install-desktop` and so on.
+Nothing else in this repository is an installer.
+
+There used to be a shell one. It did a third of its job redundantly, could not be used by
+the AppImage anyway, and left two files to keep in step where one would do; its privileged
+half is now [`glasspad/uinput_setup.py`](glasspad/uinput_setup.py), packed inside the
+payload — see [Where the privileged half lives](#where-the-privileged-half-lives). What
+its `--autostart` mode did is one command of your own, and the menu entry is the reason
+nobody needed it:
+
+```bash
+cp ~/.local/share/applications/glasspad.desktop ~/.config/autostart/
+```
 
 ### First run on a machine that has never had GlassPad
 
@@ -115,9 +125,9 @@ The narrow commands remain for when you want one step rather than three:
 
 The rule step 2 writes is
 [`packaging/glasspad-udev.rules`](packaging/glasspad-udev.rules), copied verbatim —
-it is a separate file so you can read it and so `udevadm verify` can check it, and
-`install.sh` refuses to run without it rather than falling back to a copy of its
-own. Add `--dry-run` to see the plan with no password at all.
+it is a separate file so you can read it and so `udevadm verify` can check it, and the
+grant refuses to run without it rather than falling back to a copy of its own. Add
+`--dry-run` to see the plan with no password at all.
 
 If that command says the group was newly added, it takes effect at the **next
 login**: a process keeps the groups it was started with, and no amount of
@@ -129,10 +139,11 @@ out loud — once on stderr, and as `NO PAD` on the overlay itself — because a
 that silently does nothing is indistinguishable from an overlay that is broken,
 which is what a fresh install used to look like.
 
-Note that `PREFIX` relocates **only** the desktop entry and icons. The module
-config and udev rule are absolute `/etc` paths and ignore `PREFIX`, so
-`PREFIX=/tmp/x ./install.sh` is not a sandbox. Use `--user` for a run that
-touches nothing outside `$HOME`.
+Note that nothing relocates. `--install-desktop` writes only inside `$XDG_DATA_HOME`;
+`--install-uinput` writes two absolute `/etc` paths and names both before asking for a
+password. There is no `PREFIX` to set, which removes the trap that came with one: a
+"rehearsal" that redirected the harmless half and still edited `/etc`. `--dry-run` is the
+only flag that promises not to touch the machine, and it elevates nothing.
 
 Run it from a checkout:
 
@@ -258,18 +269,27 @@ notices until a bug report says the binary does not match the repository. The bu
 refuse to do it -- sometimes you need exactly that binary -- it **says so**, and a test
 insists the line is one of two honest answers rather than blank.
 
-### Where `install.sh` fits now
+### Where the privileged half lives
 
-It is not a second thing to hand over. The AppImage **packs it** —
-`usr/share/glasspad/install.sh` — and `--install-uinput` is a thin front end that
-resolves that file and runs it under `pkexec`. Delete it from the tree and the one-file
-install loses the ability to grant `/dev/uinput`, which is precisely the failure that
-leaves a newcomer with controls that light up and convey nothing.
+A bundle cannot contain `/etc/udev/rules.d`, so it carries the rule and the code that
+writes it, and `--install-uinput` is a thin front end that runs that code under `pkexec`.
+Delete either one and the one-file install loses the ability to grant `/dev/uinput` —
+precisely the failure that leaves a newcomer with controls that light up and convey
+nothing.
 
-The modes a bundle needs are `--uinput` and `--uninstall-uinput`. The rest — `--user`,
-`--autostart`, `--check`, the broad `--uninstall` — are for installing from a checkout,
-and are the reason `glasspad --install-desktop` exists separately rather than being
-shelled out to: a menu entry has nothing to do with a source tree.
+It is Python now, at `glasspad/uinput_setup.py`, and it is **stdlib only** on purpose.
+Root cannot read an AppImage payload — the FUSE mount is restricted to the account that
+mounted it — so what runs elevated has to be copied out to an ordinary filesystem first.
+Copying a script is easy; copying a *package* so that `import glasspad.something` still
+works means handing root a `PYTHONPATH` into a temporary directory. A self-contained file
+plus the rule, side by side, is the smallest thing that can be staged, and staging is
+where the size has to be judged.
+
+The modes are `--uinput`, `--uninstall-uinput` and `--check`. The last is what
+`glasspad --status` prints rows from, so the two cannot disagree about whether your
+machine is granted — one owner, one rendering. `--uninstall-uinput` stays narrow: the two
+files this installer writes, and it says in as many words that your layout, your desktop
+entry and `input` membership are none of its business.
 
 `--install-desktop` writes `org.glasspad.GlassPad.desktop` into `$XDG_DATA_HOME` and the
 icon into the user's own icon theme, pointing `Exec=` at `$APPIMAGE` — the runtime's own
@@ -303,7 +323,10 @@ was load-bearing:
 
 What keeping both cost was every packaging change written twice — the udev rule and the
 installer went into both builders in a single day — plus a third payload layout for the
-path resolvers to keep handling.
+path resolvers to keep handling. The shell installer eventually cost the same thing to
+itself: `install.sh` and `--install-uinput` were one install wearing two clothes, and the
+day the privileged half became Python the shell had nothing left that the AppImage could
+not do.
 
 ### Type-2 internals, and borrowing tools offline
 
@@ -389,14 +412,17 @@ to it, because the alternative — a traceback, or silence — teaches the reade
 Three commands, in order of how much they cost:
 
 ```bash
-python3 -m glasspad --status      # this machine: library, compositor, /dev/uinput, profiles
-./install.sh --check              # uinput module, group, udev rule, desktop entry
+python3 -m glasspad --status      # this machine: library, compositor, grants, profiles
+python3 -m glasspad --selftest    # the chain end to end, against /dev/null: 95 checks
 python3 tools/check_all.py        # the whole suite: 26 suites, ~35 s
 ```
 
-`install.sh --check` changes nothing; it is the "why is there no overlay on screen"
-command, and it walks the chain the overlay actually needs — PyGObject, GTK 4, the
-typelib, `libgtk4-layer-shell`, then a Wayland session — in the order they fail.
+`--status` changes nothing. It is the "why is there no overlay on screen" command, and it
+walks the chain the overlay actually needs — PyGObject, GTK 4, the typelib,
+`libgtk4-layer-shell`, a Wayland session, the compositor's `zwlr_layer_shell_v1` global,
+then the device: modules-load config, the udev rule, whether *your account* can write
+`/dev/uinput`, and group membership — in the order they fail. Exit status is 0 only when
+the overlay could actually run.
 
 The input ABI is checked by **importing** the module, never by grepping it, because this
 port's bug class was constants whose names were right while their numbers were off by one —
@@ -484,7 +510,7 @@ packed copies rather than the checkout.
 | `GLASSPAD_LAYER_SHELL` | Absolute path to `libgtk4-layer-shell.so.0`, for a library the loader cannot find. `--status` prints this exact hint when it is the missing piece. |
 | `GLASSPAD_BUNDLE`, `GLASSPAD_BUNDLE_LIB` | Bundle root markers set by the launcher. `APPDIR` is honoured as well. |
 | `GLASSPAD_BIN_DIR` | Where the `glasspad` command on `PATH` is created. Default `~/.local/bin`. |
-| `GLASSPAD_INSTALLER_DIR` | Where `install.sh` is searched for, when a bundle runs the privileged half. |
+| `GLASSPAD_INSTALLER_DIR` | Where the privileged pair (script + rule) is searched for. Put an empty directory here to rehearse "this build ships nothing". |
 | `GLASSPAD_DOC_ROOT` | Where `LICENSE` and `licenses/THIRD-PARTY-NOTICES.txt` are looked up by the About box. |
 | `GLASSPAD_RUNTIME` | Build-time only. An explicit AppImageKit runtime ELF. **Refused** unless it matches `packaging/runtime-pin.json` — the override that also silenced the check would make the pin decoration. |
 | `GLASSPAD_RUNTIME_DONORS` | Build-time only. Colon-separated `.AppImage` files to borrow a runtime from when the pinned download is unreachable. Default: the usual AppImage directories. |

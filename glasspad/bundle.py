@@ -125,7 +125,7 @@ def uinput_ready(path: str = UINPUT_PATH) -> tuple[bool, str]:
     the explanation was "add yourself to the group that owns it, or install an udev
     rule" -- true, abstract, and the kind of sentence that makes a person conclude
     the software is broken rather than that one command is missing. A bundle that
-    ships install.sh plus the rule CAN fix it, so the message names it.
+    ships the privileged script plus the rule CAN fix it, so the message names it.
     """
     if not os.path.exists(path):
         return False, (f"{path} does not exist: the uinput kernel module is not "
@@ -140,7 +140,7 @@ def uinput_ready(path: str = UINPUT_PATH) -> tuple[bool, str]:
 def describe() -> str:
     """One line for --status and for the startup banner."""
     p, why = layer_shell_path()
-    # install.sh prints this line among its own, whose labels are padded to 12 before the
+    # --status prints this line among others whose labels are padded to 12 before the
     # colon; "layer-shell" is 11 characters, so one space lines the colons up.
     return f"layer-shell : {p or 'NOT FOUND'} ({why})"
 
@@ -227,19 +227,29 @@ def read_doc(name: str) -> tuple[str, str | None]:
 # what turns "download one file" into a complete install. These resolvers are the
 # only place that knows where those two landed, and --status uses them too so the
 # two can never disagree about what is installed.
+# The privileged pair: the script that changes permissions, and the rule it installs.
 #
-# Same three layouts as doc_roots(), because they are the same two files moving
-# to the same three places:
+#     checkout    <repo>/glasspad/uinput_setup.py   <repo>/packaging/glasspad-udev.rules
+#     AppImage    usr/share/glasspad/glasspad/       usr/share/glasspad/packaging/
 #
-#     checkout    <repo>/glasspad/bundle.py      -> <repo>/install.sh
-#     AppImage    usr/share/glasspad/glasspad/   -> usr/share/glasspad/install.sh
+# Both are needed together: the script refuses to invent a policy, so no rule means no
+# grant, and it looks for the rule NEXT TO ITSELF because that is the only relationship
+# that survives being staged into a temporary directory.
 
 INSTALLER_ROOT_ENV = "GLASSPAD_INSTALLER_DIR"
-INSTALLER_NAME = "install.sh"
-RULE_REL = os.path.join("packaging", "glasspad-udev.rules")
+PRIV_NAME = "uinput_setup.py"
+RULE_NAME = "glasspad-udev.rules"
+RULE_REL = os.path.join("packaging", RULE_NAME)
 
 
 def installer_roots() -> list[str]:
+    """Where to look for the privileged pair: override, package root, then cwd.
+
+    $GLASSPAD_INSTALLER_DIR is first because a test must be able to point this at an
+    empty directory and get "not shipped" -- without the override winning, the resolver
+    walks on to find the real checkout, which is correct behaviour and a live change to
+    /etc when the caller also elevates. That has happened.
+    """
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.dirname(here)
     out: list[str] = []
@@ -256,82 +266,96 @@ def installer_roots() -> list[str]:
     return uniq
 
 
-def find_installer() -> str | None:
-    """Path to install.sh, or None when this bundle did not ship one."""
-    for root in installer_roots():
-        cand = os.path.join(root, INSTALLER_NAME)
+def find_priv_script() -> str | None:
+    """Path to glasspad/uinput_setup.py, or None when this build did not ship one."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    cands = [os.path.join(here, PRIV_NAME)]
+    cands += [os.path.join(root, "glasspad", PRIV_NAME) for root in installer_roots()]
+    for cand in cands:
         if os.path.isfile(cand) and os.access(cand, os.R_OK):
             return cand
     return None
 
 
+def priv_rule_src(script: str | None) -> str | None:
+    """The rule that script installs, or None when it is not alongside.
+
+    Searched next to the script first (the staged layout), then ../packaging/ (the
+    checkout), then packaging/ (the payload root). Nothing embedded: two versions of a
+    permission policy is how a machine ends up running the one nobody reviewed.
+    """
+    if not script:
+        return None
+    d = os.path.dirname(os.path.abspath(script))
+    for cand in (os.path.join(d, RULE_NAME),
+                 os.path.normpath(os.path.join(d, "..", RULE_REL)),
+                 os.path.join(d, RULE_REL)):
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
 STAGED_NOTE = (
-    "The installer is copied to a private directory first: an AppImage payload is a\n"
-    "FUSE mount only your own account may open, so root could not read it in place.")
+    "The privileged script and the rule are copied to a private directory first: an\n"
+    "AppImage payload is a FUSE mount only your own account may open, so root could\n"
+    "not read either of them in place.")
+
+
+def _inside_bundle(path: str) -> bool:
+    # NOT os.path.abspath(os.environ.get("APPDIR") or ""): abspath("") is the cwd, which
+    # would make every run from inside a source checkout look like a bundle and silently
+    # stage the pair -- the one thing that makes it unclear which file is about to execute
+    # as root. An unset APPDIR means no APPDIR at all.
+    appdir = os.environ.get("APPDIR") or ""
+    appdir = os.path.abspath(appdir) if appdir else ""
+    return "/.mount_" in path or bool(appdir and path.startswith(appdir + os.sep))
 
 
 @contextlib.contextmanager
-def staged_installer(installer=None):
-    """Yield a path that ROOT can open, then clean it up.
+def staged_priv(script: str | None = None, rule: str | None = None):
+    """Yield (script_path, rule_path) that ROOT can open, then clean up.
 
-    An AppImage payload is a FUSE mount -- `ro,nosuid,nodev,user_id=1000` -- and a
-    FUSE mount without allow_other is reachable only by the user who mounted it.
-    Root is not that user. So the obvious command,
+    An AppImage payload is a FUSE mount -- `ro,nosuid,nodev,user_id=1000` -- and a FUSE
+    mount without allow_other is reachable only by the user who mounted it. Root is not
+    that user. So the obvious command,
 
-        pkexec sh /tmp/.mount_GlassXXX/usr/share/glasspad/install.sh
+        pkexec python3 /tmp/.mount_GlassXXX/usr/share/glasspad/glasspad/uinput_setup.py
 
-    fails with EACCES on the open(), before a single line of the script runs. Found
-    by a real install attempt on a virgin machine, and no dry run of mine could
-    have shown it: --dry-run deliberately does not elevate, so the file was read by
-    the one account permitted to read it.
+    fails with EACCES on the open(), before a single line runs. Found by a real install
+    attempt on a virgin machine, and no dry run of mine could have shown it: --dry-run
+    deliberately does not elevate, so the files were read by the one account permitted to.
 
-    Fix: copy what root needs into a fresh 0700 directory on the real filesystem.
-    The invoking user owns it, so nobody else on the machine can swap the script
-    between copy and elevation, and root bypasses the mode bits to read it. The rule
-    travels beside it, because install.sh resolves its rule relative to its own
-    location and refuses to invent one.
+    Fix: copy BOTH into a fresh 0700 directory on the real filesystem, side by side,
+    because the script finds its rule next to itself and refuses to invent one. The
+    invoking user owns the directory, so nobody else on the machine can swap the script
+    between copy and elevation, and root bypasses the mode bits to read it.
 
     A checkout is left alone: /home is root-readable, and copying would only obscure
     which file is about to be executed.
     """
-    installer = installer or find_installer()
-    if not installer or not os.path.exists(installer):
-        yield None
+    script = script or find_priv_script()
+    if not script or not os.path.exists(script):
+        yield None, None
         return
-
-    # NOT os.path.abspath(os.environ.get("APPDIR") or ""): abspath("") is the cwd,
-    # which would make every run from inside a source checkout look like a bundle and
-    # silently stage the installer -- the one thing that makes it unclear which file
-    # is about to execute as root. An unset APPDIR means no APPDIR at all.
-    appdir = os.environ.get("APPDIR") or ""
-    appdir = os.path.abspath(appdir) if appdir else ""
-    inside_bundle = ("/.mount_" in installer) or bool(
-        appdir and installer.startswith(appdir + os.sep))
-    if not inside_bundle:
-        yield installer
+    rule = rule or priv_rule_src(script)
+    if not (_inside_bundle(script) or _inside_bundle(rule or "")):
+        yield script, rule
         return
-
-    tmp = tempfile.mkdtemp(prefix="glasspad-installer-")
+    if not rule:
+        yield script, None          # the script itself will report the missing policy
+        return
+    tmp = tempfile.mkdtemp(prefix="glasspad-priv-")
     try:
         os.chmod(tmp, 0o700)
-        dest = os.path.join(tmp, "install.sh")
-        shutil.copyfile(installer, dest)
-        shutil.copymode(installer, dest)
-        rule_src = os.path.join(os.path.dirname(installer), RULE_REL)
-        if os.path.exists(rule_src):
-            os.makedirs(os.path.join(tmp, os.path.dirname(RULE_REL)), exist_ok=True)
-            shutil.copyfile(rule_src, os.path.join(tmp, RULE_REL))
-        yield dest
+        dest_script = os.path.join(tmp, PRIV_NAME)
+        shutil.copyfile(script, dest_script)
+        shutil.copymode(script, dest_script)
+        dest_rule = os.path.join(tmp, RULE_NAME)
+        shutil.copyfile(rule, dest_rule)
+        yield dest_script, dest_rule
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-
-def installer_rule_src(installer: str | None) -> str | None:
-    """The rule file that installer copies, or None when it is not alongside."""
-    if not installer:
-        return None
-    cand = os.path.join(os.path.dirname(os.path.abspath(installer)), RULE_REL)
-    return cand if os.path.isfile(cand) else None
 
 
 # --- what a first-run user can actually run ---------------------------------
@@ -452,7 +476,7 @@ def checkout_root() -> str | None:
     root = os.path.dirname(here)
     return root if (os.path.isdir(os.path.join(root, "glasspad"))
                     and (os.path.exists(os.path.join(root, "README.md"))
-                         or os.path.exists(os.path.join(root, "install.sh")))) else None
+                         or os.path.exists(os.path.join(root, "LICENSE")))) else None
 
 
 def cli_target() -> tuple[str, str] | None:
