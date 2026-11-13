@@ -527,6 +527,22 @@ def test_installer_settles_udev_before_measuring_the_node():
           "user_can_write_uinput" in src and "sleep 0.25" in src)
 
 
+def test_the_parent_flushes_before_the_child_talks():
+    """Ordering is part of what a privileged transcript means.
+
+    install.sh writes to the same fd as the Python front end, and Python block-buffers
+    when stdout is not a terminal. Piped to a file or `tee`, the child's output landed
+    first and the parent's "the installer will change nothing" arrived afterwards -- a
+    saved log of a root-escalating command that reads backwards. In a terminal Python
+    line-buffers, so this looks fine forever until someone records it.
+    """
+    src = open(os.path.join(ROOT, "glasspad", "__main__.py")).read()
+    spawns = src.count("subprocess.call(cmd)")
+    flushes = src.count("sys.stdout.flush()")
+    check(f"every spawn is preceded by a flush ({flushes} flushes, {spawns} spawns)",
+          spawns > 0 and flushes >= spawns)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

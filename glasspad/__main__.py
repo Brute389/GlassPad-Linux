@@ -308,6 +308,8 @@ def uninstall_uinput(argv: list[str] = ()) -> int:
         cmd = (["sh"] if dry else [tool, "sh"]) + [staged, "--uninstall-uinput"]
         if dry:
             cmd.append("--dry-run")
+        sys.stdout.flush()                          # see the note in install_uinput
+        sys.stderr.flush()
         rc = subprocess.call(cmd)
     if rc == 125:
         print(f"\nAuthorisation declined ({tool} exit 125); nothing was changed.")
@@ -460,6 +462,13 @@ def install_uinput(argv: list[str] = ()) -> int:
         cmd = (["sh"] if dry else [tool, "sh"]) + [staged, "--uinput"]
         if dry:
             cmd.append("--dry-run")
+        # Flush before spawning: install.sh writes straight to the same fd, and when
+        # stdout is a pipe or a file the parent block-buffers -- so a logged run reads
+        # as though the installer had already run and only then been explained. In a
+        # terminal Python line-buffers and the order looks fine, which is exactly why
+        # nobody notices until someone saves the output of a privileged command.
+        sys.stdout.flush()
+        sys.stderr.flush()
         rc = subprocess.call(cmd)
     if dry:
         return rc
