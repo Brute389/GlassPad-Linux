@@ -315,7 +315,8 @@ def uninstall_uinput(argv: list[str] = ()) -> int:
     if rc != 0 or dry:
         return rc
 
-    if pad.uinput_available():
+    writable, _moved = _uinput_state_settling()
+    if writable:
         print("\n/dev/uinput is still writable by your account. That is not the rule")
         print("we just removed -- it is gone. A distro rule is most likely granting")
         print("it (KDE Connect and Steam both do), which means GlassPad needs no")
@@ -326,6 +327,56 @@ def uninstall_uinput(argv: list[str] = ()) -> int:
         print("NO PAD and name the fix instead of drawing controls that go nowhere.")
     print("Untouched: your layout, your desktop entry, the input group.")
     return 0
+
+
+def _input_group_in_database() -> bool:
+    """Does the system DATABASE say this account is in group `input`?
+
+    Not os.getgroups(): this process carries the groups it logged in with, which is
+    precisely the stale answer. `id -nG <name>` asks the useful question -- what
+    would a NEW process get -- and needs no privileges.
+    """
+    import pwd
+    import subprocess
+
+    name = os.environ.get("USER") or pwd.getpwuid(os.getuid()).pw_name
+    try:
+        out = subprocess.run(["id", "-nG", name], capture_output=True, text=True,
+                             timeout=5)
+    except (OSError, subprocess.SubprocessError, KeyError):
+        return False
+    return "input" in out.stdout.split()
+
+
+def _uinput_state_settling(samples: int = 12, delay: float = 0.25):
+    """Poll /dev/uinput until the answer stops moving. Returns (writable, moved).
+
+    udev applies rules asynchronously. install.sh settles the queue now, and this is
+    the second half of the same lesson: report a stable reading rather than whichever
+    sample happened first. A single reading is what made a successful install on real
+    hardware announce "still not writable for you" about a device that udevd was
+    already on its way to handing over.
+    """
+    import time
+
+    from glasspad import pad
+
+    try:
+        prev = bool(pad.uinput_available())
+    except Exception:                                       # noqa: BLE001
+        return False, False
+    moved = False
+    for _ in range(samples):
+        time.sleep(delay)
+        try:
+            cur = bool(pad.uinput_available())
+        except Exception:                                   # noqa: BLE001
+            cur = False
+        if cur == prev:
+            return cur, moved
+        moved = True
+        prev = cur
+    return prev, moved
 
 
 def install_uinput(argv: list[str] = ()) -> int:
@@ -389,6 +440,9 @@ def install_uinput(argv: list[str] = ()) -> int:
     dry = "--dry-run" in argv
     if dry:
         print("(--dry-run: the installer will report and change nothing)")
+    # Recorded so the verdict afterwards can say whether THIS run is what changed
+    # group membership, instead of suggesting a re-login that cannot help.
+    groups_before = None if dry else _input_group_in_database()
     # No privilege elevation at all for a dry run: install.sh --uinput --dry-run is
     # safe unprivileged, and asking for a password to read a plan is absurd.
     #
@@ -417,17 +471,33 @@ def install_uinput(argv: list[str] = ()) -> int:
         print("GlassPad never started, so there is no half-configured state to untangle.")
         return rc
 
-    if pad.uinput_available():
+    writable, moved = _uinput_state_settling()
+    if writable:
         print("\n/dev/uinput is writable: GlassPad can create a pad now.")
+        if moved:
+            print("(the node changed while we watched -- udev applies rules in the")
+            print(" background, so a single reading right after a trigger means nothing)")
         print("Start it again and the controls will actually reach the game.")
         return 0
 
-    print("\nInstalled -- but /dev/uinput is still not writable *for you*.")
-    print("That is expected when this run added the group: a process keeps the")
-    print("groups it started with, so membership lands at the NEXT login. Log out")
-    print("and back in, then confirm with:")
-    print("    glasspad --status")
-    return 0
+    if groups_before is False:
+        print("\nInstalled -- but /dev/uinput is still not writable *for you*.")
+        print("This run added you to group `input`, and a process keeps the groups it")
+        print("started with: membership lands at the NEXT login. Log out and back in,")
+        print("then confirm with:")
+        print("    glasspad --status")
+        return 0
+
+    print("\nInstalled -- but /dev/uinput is still not writable *for you*, and the")
+    print("group is NOT the reason: you were already in `input` before this run, so")
+    print("re-logging will not change anything. The rule is installed; something else")
+    print("decides this node's permissions. Ask it directly:")
+    print("    getfacl /dev/uinput")
+    print("    udevadm test /devices/virtual/misc/uinput 2>&1 \\| grep -E "
+          "'99-glasspad|MODE|GROUP|uaccess'")
+    print("An ACL entry or a TAG+=\"uaccess\" rule aimed elsewhere both outrank these")
+    print("mode bits. Report those two outputs if you cannot see the answer.")
+    return 1
 
 
 if __name__ == "__main__":

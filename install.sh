@@ -235,6 +235,24 @@ enable_module() {
     fi
 }
 
+udev_settle() {
+    # `udevadm trigger` queues change events and returns immediately; udevd applies
+    # them in the background. Anything that reads the device right after a trigger is
+    # racing it -- and the install verdict lost that race on real hardware, reporting
+    # "NOT yet writable" for a rule that had in fact been applied a moment later.
+    # Bounded, because a wedged udevd must not wedged the installer.
+    [ "$DRY" = 1 ] && return 0
+    command -v udevadm >/dev/null 2>&1 || return 0
+    udevadm settle --timeout="${1:-10}" >/dev/null 2>&1 || true
+    return 0
+}
+
+user_can_write_uinput() {
+    # Root can always write the node, so testing as root proves nothing about the
+    # account that will actually run GlassPad.
+    su -s /bin/sh "$TARGET_USER" -c 'test -w /dev/uinput' 2>/dev/null
+}
+
 install_udev_rule() {
     # Some systemd builds already ship a rule handing /dev/uinput to the input
     # group (check: grep uinput /lib/udev/rules.d/*.rules). Writing our own is
@@ -260,10 +278,19 @@ install_udev_rule() {
     if command -v udevadm >/dev/null 2>&1; then
         run udevadm control --reload-rules
         run udevadm trigger
+        udev_settle
     fi
 }
 
 add_user_to_input_group() {
+    # GROUP_WAS_ADDED is the whole point of this being a function with a side
+    # effect rather than a line of usermod. The verdict at the end of --uinput used
+    # to say "if this run added the group, it only applies at the next login" --
+    # unconditionally, on a machine where the answer was no, the group had been
+    # there for years, and the real cause was something else entirely. Guessing at
+    # the cause is worse than not knowing it: the user follows the advice (logs out,
+    # back in) and the device is still broken.
+    GROUP_WAS_ADDED=0
     target=$TARGET_USER
     say "permissions for $target"
     if [ "$target" = "root" ]; then
@@ -275,6 +302,7 @@ add_user_to_input_group() {
         return
     fi
     run usermod -aG input "$target"
+    GROUP_WAS_ADDED=1
     say "  NOTE: $target must log out and back in for the group to apply."
 }
 
@@ -431,6 +459,7 @@ uninstall() {
     if command -v udevadm >/dev/null 2>&1; then
         run_ok udevadm control --reload-rules
         run_ok udevadm trigger
+        udev_settle
     fi
     say ""
     say "left alone on purpose:"
@@ -476,6 +505,10 @@ case "$MODE" in
             if command -v udevadm >/dev/null 2>&1; then
                 run udevadm control --reload-rules
                 run udevadm trigger
+            # Same race as the install, pointing the other way: measuring
+            # immediately can report 'no longer writable' for a node that a
+            # uaccess rule is about to hand straight back.
+            udev_settle
             fi
         fi
         say ""
@@ -534,18 +567,38 @@ case "$MODE" in
             say "  Check with:  sudo modprobe uinput"
             exit 1
         else
-            # Root can always write the node, so asking root proves nothing.
-            # Ask the account that will actually run GlassPad.
-            as_user=$(su -s /bin/sh "$TARGET_USER" -c 'test -w /dev/uinput && echo yes || echo no' 2>/dev/null || echo unknown)
+            # An empty udev queue is not the same as this node having been
+            # re-written, so settle and then poll for the condition we care about
+            # rather than trusting the queue's word for it.
+            waited=0
+            while [ "$waited" -lt 20 ]; do
+                user_can_write_uinput && break
+                sleep 0.25
+                waited=$((waited + 1))
+            done
+            if user_can_write_uinput; then
+                as_user=yes
+            else
+                as_user=no
+            fi
             perms=$(ls -l /dev/uinput | awk '{print $1" "$3":"$4}')
             say "  /dev/uinput : $perms"
             if [ "$as_user" = yes ]; then
                 say "  writable by $TARGET_USER: GlassPad can create a pad now."
+                [ "$waited" -gt 0 ] && say "  (took $(($waited / 4))s for udev to apply the rule)"
+            elif [ "$GROUP_WAS_ADDED" = 1 ]; then
+                say "  NOT writable by $TARGET_USER."
+                say "  This run added you to group input, and a process keeps the groups"
+                say "  it started with: membership lands at the NEXT login. Log out and"
+                say "  back in, then confirm with:  glasspad --status"
             else
-                say "  NOT yet writable by $TARGET_USER."
-                say "  The rule is installed; if this run added the group it only"
-                say "  applies to a NEW login. Log out and back in, then confirm:"
-                say "      glasspad --status"
+                say "  NOT writable by $TARGET_USER -- and the group is NOT the reason,"
+                say "  because you were already in it before this run."
+                say "  Something else owns this node. Ask udev what it decided:"
+                say "      udevadm test /devices/virtual/misc/uinput 2>&1 | \\"
+                say "          grep -E '99-glasspad|MODE|GROUP|uaccess'"
+                say "  A rule with TAG+=\"uaccess\" for another account, or a setfacl"
+                say "  line further down the list, both win over mode bits here."
             fi
         fi
         ;;

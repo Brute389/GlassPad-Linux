@@ -429,6 +429,104 @@ def test_a_checkout_installer_is_used_in_place():
     check("nothing was staged", before == after)
 
 
+def _install_with_stubbed_privileges(group_before, node_writable):
+    """Run install_uinput() with the privileged call stubbed; return (rc, output)."""
+    import contextlib
+    import io
+    import subprocess as sp
+
+    import glasspad.__main__ as m
+    from glasspad import pad
+
+    real_call, real_avail, real_grp = sp.call, pad.uinput_available, m._input_group_in_database
+    seen = []
+    sp.call = lambda cmd, *a, **k: (seen.append(list(cmd)), 0)[1]
+    pad.uinput_available = lambda *a, **k: node_writable
+    m._input_group_in_database = lambda: group_before
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = m.install_uinput([])
+    finally:
+        sp.call, pad.uinput_available, m._input_group_in_database = real_call, real_avail, real_grp
+    return rc, buf.getvalue(), seen
+
+
+def test_verdict_does_not_blame_a_group_it_did_not_change():
+    """The post-install report told the truth about the wrong thing.
+
+    On a real virgin install the installer printed:
+
+        permissions for josh
+          already in group input
+        ...
+        Installed -- but /dev/uinput is still not writable *for you*.
+        That is expected when this run added the group ... Log out and back in
+
+    It had NOT added the group -- its own line above says so -- and the device was
+    in fact already writable: `udevadm trigger` is asynchronous, so the check read
+    the node before udevd got to it. The user gets advice that cannot help (log out,
+    back in) for a problem that does not exist, while a genuine failure would get the
+    same misdiagnosis. So the branch keys on what this run actually did.
+    """
+    rc, out, _ = _install_with_stubbed_privileges(group_before=True, node_writable=False)
+    check("an unchanged group is not offered as the explanation",
+          "already" in out or "NOT the reason" in out)
+    check("and the user is not told to re-login for nothing",
+          "NEXT login" not in out and "Log out" not in out)
+    check("the message points at the thing that decides the node",
+          "udevadm" in out or "getfacl" in out)
+    check(f"and it exits nonzero, because nothing works yet (rc={rc})", rc != 0)
+
+
+def test_a_group_this_run_added_does_say_next_login():
+    rc, out, _ = _install_with_stubbed_privileges(group_before=False, node_writable=False)
+    check(f"the next-login advice appears only when the group is new ({rc})",
+          "NEXT login" in out or "next login" in out.lower())
+    check("and that path is not treated as a failure of the installer", rc == 0)
+
+
+def test_a_working_install_reports_working():
+    rc, out, _ = _install_with_stubbed_privileges(group_before=True, node_writable=True)
+    check(f"writable device, exit 0 (rc={rc})", rc == 0)
+    check("says the pad can be created now", "can create a pad now" in out)
+
+
+def test_installer_settles_udev_before_measuring_the_node():
+    """`udevadm trigger` queues events and returns; the node changes later.
+
+   install.sh must therefore wait for the queue before asking anyone whether the
+    device is writable, in both directions -- the uninstall verdict has the same
+    race in reverse (it can report "no longer writable" for a node that a uaccess
+    rule is about to hand back).
+    """
+    src = open(os.path.join(ROOT, "install.sh")).read()
+    check("a settle helper exists", "udev_settle()" in src)
+    check("it is bounded, so a wedged udevd cannot wedge the installer",
+          "--timeout=" in src.split("udev_settle()")[1][:600])
+    # Only real command lines count. The phrase also appears in prose, and the first
+    # version of this check "found" a trigger inside its own docstring -- a test that
+    # fails for the wrong reason is worse than one that is missing.
+    import re
+    triggers = list(re.finditer(r"^[ \t]*(?:run|run_ok)[ \t]+udevadm trigger",
+                                src, re.MULTILINE))
+    check(f"the script triggers udev at all ({len(triggers)} call sites)",
+          len(triggers) >= 3)
+    offenders = []
+    for i, m in enumerate(triggers, start=1):
+        tail = src[m.end():]
+        end = tail.find("\n}")
+        body = tail[:end if end != -1 else 1500]
+        before_measuring = body.split("su -s")[0].split("user_can_write")[0]
+        if "udev_settle" not in before_measuring:
+            offenders.append("line " + str(src[:m.start()].count("\n") + 1))
+    check("every trigger settles the queue before anything measures the device"
+          + (f" (missing at {', '.join(offenders)})" if offenders else ""),
+          not offenders)
+    check("the install verdict polls for the condition rather than trusting the queue",
+          "user_can_write_uinput" in src and "sleep 0.25" in src)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:
