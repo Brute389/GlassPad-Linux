@@ -276,8 +276,13 @@ def test_the_target_user_is_named_explicitly():
     environment does not quietly become "root".
     """
     import glasspad.__main__ as m
+    import pwd
     saved = {k: os.environ.get(k) for k in ("USER", "LOGNAME", "SUDO_USER")}
-    real_user = saved.get("USER") or "you"
+    # Resolved the way the code resolves it. `$USER or "you"` would have been a test that
+    # passes only where $USER happens to be exported -- true in a desktop shell, false over
+    # ssh, false under `env -i`, and the account that matters most for a headless CI run is
+    # precisely the one with no $USER.
+    real_user = (saved.get("USER") or pwd.getpwuid(os.getuid()).pw_name)
     try:
         os.environ["USER"] = "root"
         os.environ["LOGNAME"] = "root"

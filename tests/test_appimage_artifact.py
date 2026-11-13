@@ -166,6 +166,13 @@ def test_extracted_contents_match_the_source_tree():
         script = os.path.join(root, "usr/share/glasspad/glasspad/uinput_setup.py")
         if os.path.isfile(script):
             sys.path.insert(0, os.path.join(root, "usr/share/glasspad"))
+            # Importing a module WRITES a .pyc beside it, and this tree is the extracted
+            # payload we are about to grade for shipped bytecode. The builder purges
+            # exactly this class of file before packing, because a .pyc compiled by the
+            # build machine's Python is the worst kind of packaging bug -- it only
+            # misbehaves on someone else's. A test must not re-create it while looking.
+            no_pyc = sys.dont_write_bytecode
+            sys.dont_write_bytecode = True
             try:
                 import importlib.util
                 spec = importlib.util.spec_from_file_location(
@@ -177,7 +184,10 @@ def test_extracted_contents_match_the_source_tree():
                       bool(found) and found.endswith("glasspad-udev.rules")
                       and os.path.isfile(found))
             finally:
+                sys.dont_write_bytecode = no_pyc
                 sys.path.remove(os.path.join(root, "usr/share/glasspad"))
+        check("inspecting the payload left no bytecode behind",
+              not [d for d, _s, f in os.walk(root) if d.endswith("__pycache__")])
         check("AppRun is executable in the image",
               os.access(os.path.join(root, "AppRun"), os.X_OK))
 
