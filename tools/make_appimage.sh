@@ -160,6 +160,20 @@ export APPDIR
 export GLASSPAD_BUNDLE="\$APPDIR"
 export GLASSPAD_BUNDLE_LIB="\$APPDIR/usr/lib"
 export PYTHONPATH="\$APPDIR/usr/share/glasspad\${PYTHONPATH:+:\$PYTHONPATH}"
+# PYTHONSAFEPATH matters more than it looks. "python -m glasspad" puts the CURRENT
+# DIRECTORY ahead of PYTHONPATH, so running this AppImage from inside a source
+# checkout silently executes that checkout instead of the payload -- found by
+# changing a file in the tree and watching the artefact report the new text. The
+# reverse case is the nasty one: a stale copy in the download folder shadowing a
+# newer AppImage, with no symptom at all. 3.11+ honours this, and it removes the
+# cwd entry for -m without isolating PYTHONPATH itself.
+#
+# Written without backticks on purpose. This block is an UNQUOTED heredoc, so
+# backticks here are a command substitution: the first version of this comment ran
+# the overlay while the builder was generating its own launcher, which never
+# returns. Symptom: a build that hangs after "valid" with a 0-byte AppRun and a
+# stray NO PAD warning in the log, and no clue in the source that anything is wrong.
+export PYTHONSAFEPATH=1
 export PATH="\$APPDIR/usr/bin:\$PATH"
 # Only prepend our lib dir; overriding LD_LIBRARY_PATH outright is how bundles break
 # the caller's OpenGL/VA drivers.
@@ -181,6 +195,19 @@ fi
 exec python3 -m glasspad "\$@"
 APPRUN
 chmod +x "$appdir/AppRun" "$appdir/usr/bin/glasspad-profile"
+
+# The AppRun is generated from an unquoted heredoc, which means any unescaped
+# backtick or $( ) in its text is executed by the GENERATOR, not stored -- and a
+# build that hangs with a zero-byte AppRun is what that looks like. Three cheap
+# assertions, all of which would have caught it: the file exists, it is not empty,
+# and it parses as a shell script.
+if [ ! -s "$appdir/AppRun" ]; then
+  echo "  ERROR: AppRun is missing or empty -- the heredoc did not write it" >&2
+  echo "  Check for unescaped backticks or \$( ) in the AppRun text." >&2
+  exit 1
+fi
+bash -n "$appdir/AppRun" || { echo "  ERROR: the generated AppRun is not valid shell" >&2; exit 1; }
+head -1 "$appdir/AppRun" | grep -q '^#!' || { echo "  ERROR: AppRun has no shebang" >&2; exit 1; }
 
 cat > "$appdir/usr/share/doc/glasspad/PACKAGING.txt" <<NOTES
 GlassPad $version, AppDir layout
@@ -209,7 +236,40 @@ NOTES
 echo "==> the staged tree runs out of the directory (this is the real test)"
 # PYTHONDONTWRITEBYTECODE: this smoke test imports the package, and its .pyc files would
 # otherwise land inside the tree we are about to ship (see mk_appimage_offline.py).
-( cd / && PYTHONDONTWRITEBYTECODE=1 "$appdir/AppRun" --status ) | sed 's/^/    /'
+# The gate asks whether the BUNDLE is well-formed, not whether this machine is
+# allowed to create a gamepad. --status exits nonzero when no pad can be created,
+# and that is a permission on the machine doing the building -- so requiring a
+# clean exit meant an AppImage could not be built on a virgin system or in CI,
+# which is precisely where the artefact is needed. What must hold is that the
+# payload started, found libgtk4-layer-shell, and saw the compositor. A /dev/uinput
+# complaint is expected here and is reported, not fatal.
+set +e
+smoke=$( cd / && PYTHONDONTWRITEBYTECODE=1 "$appdir/AppRun" --status 2>&1 )
+smoke_rc=$?
+set -e
+printf '%s\n' "$smoke" | sed 's/^/    /'
+
+if printf '%s\n' "$smoke" | grep -q "Traceback"; then
+  echo "  ERROR: the staged AppDir raised an exception" >&2
+  exit 1
+fi
+if ! printf '%s\n' "$smoke" | grep -q "layer-shell lib :"; then
+  echo "  ERROR: the payload produced no status report at all" >&2
+  exit 1
+fi
+if printf '%s\n' "$smoke" | grep -qE "layer-shell lib :[[:space:]]*NOT FOUND"; then
+  echo "  ERROR: the payload cannot find libgtk4-layer-shell; it would start blank" >&2
+  exit 1
+fi
+if [ "$smoke_rc" != 0 ] && ! printf '%s\n' "$smoke" | grep -q "PROBLEM: /dev/uinput"; then
+  echo "  ERROR: --status failed for a reason other than /dev/uinput (exit $smoke_rc)" >&2
+  exit 1
+fi
+if [ "$smoke_rc" != 0 ]; then
+  echo "    (exit $smoke_rc solely because /dev/uinput is not writable HERE. That is"
+  echo "     this machine's permission, not a defect: the artefact tells its user to"
+  echo "     run --install-uinput, and that is the behaviour being shipped.)"
+fi
 
 if [ "$do_pack" = 0 ]; then
   echo "==> --dir: leaving the AppDir; AppRun works from it"

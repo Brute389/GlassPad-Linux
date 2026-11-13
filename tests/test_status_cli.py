@@ -51,14 +51,27 @@ def test_layer_status_is_about_the_layer_backend():
 
 
 def test_layer_status_passes_on_a_working_session():
-    if not os.environ.get("WAYLAND_DISPLAY"):
-        print("  skip no Wayland session in this environment")
-        return
+    """--status exit code is the machine's verdict, not a formality.
+
+    This asserted exit 0 unconditionally, which was true of the machine it was
+    written on and of exactly one state of that machine. Lock /dev/uinput, or run
+    it on a fresh install, and a green report is a lie: no pad can exist. So the
+    assertion now follows the measured condition, and the failing branch checks the
+    sentence a stranger would act on. Both branches have run for real today, one
+    before the device was locked and one after.
+    """
+    from glasspad import bundle
+    can_pad, why = bundle.uinput_ready()
     code, out = run("--backend", "layer", "--status")
-    check(f"exit 0 where the overlay demonstrably runs (got {code})", code == 0)
     check("the compositor is credited with layer-shell",
           "advertises zwlr_layer_shell_v1" in out)
     check("and is not accused of lacking it", "does NOT advertise" not in out)
+    if can_pad:
+        check(f"exit 0 where the pad really can be created (got {code})", code == 0)
+    else:
+        check(f"nonzero when there can be no pad at all ({why[:56]}...)", code != 0)
+        check("and it names the command that fixes it", "--install-uinput" in out)
+        check("while still refusing to call the overlay healthy", "PROBLEM" in out)
 
 
 def test_layer_status_fails_loudly_without_a_display():

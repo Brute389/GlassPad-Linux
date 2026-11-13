@@ -115,12 +115,21 @@ def layer_shell_path(extra_dirs=()) -> tuple[str | None, str]:
 
 
 def uinput_ready(path: str = UINPUT_PATH) -> tuple[bool, str]:
-    """Can we create the virtual pad? A package cannot fix this, only explain it."""
+    """Can we create the virtual pad, and if not, what single command fixes it?
+
+    The docstring used to end "...a package cannot fix this, only explain it", and
+    the explanation was "add yourself to the group that owns it, or install an udev
+    rule" -- true, abstract, and the kind of sentence that makes a person conclude
+    the software is broken rather than that one command is missing. A bundle that
+    ships install.sh plus the rule CAN fix it, so the message names it.
+    """
     if not os.path.exists(path):
-        return False, f"{path} does not exist (kernel module uinput?)"
+        return False, (f"{path} does not exist: the uinput kernel module is not "
+                       "loaded. Fix with:  glasspad --install-uinput")
     if not os.access(path, os.W_OK):
-        return False, (f"{path} exists but is not writable -- add yourself to the group "
-                       "that owns it, or install an udev rule")
+        return False, (f"{path} exists but you cannot write it, so there is no "
+                       "gamepad. One command fixes it, one password:  "
+                       "glasspad --install-uinput")
     return True, path
 
 
