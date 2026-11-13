@@ -111,7 +111,7 @@ These are properties with tests behind them, not intentions:
 
 ## Reporting a vulnerability
 
-Open a **private security advisory** on the repository (Security → Report a vulnerability)
+Open a **private security advisory** on the repository: [https://github.com/Brute389/GlassPad-Linux/security/advisories/new](https://github.com/Brute389/GlassPad-Linux/security/advisories/new) (or the repository's Security tab -> *Report a vulnerability*)
 rather than a public issue, so a fix can exist before a description does. Public issues are
 the right place for "the overlay does not appear", and the wrong place for anything that
 explains how to make a machine press its own keys.

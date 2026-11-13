@@ -90,11 +90,26 @@ advertising.
 | GNOME (mutter) | **not supported** | mutter does not implement `zwlr_layer_shell_v1`. `--status` says so plainly rather than starting an overlay you cannot see. A shell extension that provides the protocol may change that; nobody has tried one. |
 | X11, on any desktop | **not supported** | There is no layer-shell on X11. The Qt/X11 experiment that existed early in this port is deleted, along with PyQt6. |
 
-If you get it working somewhere in the "reasoned" row, that is worth an issue — not a bug
+If you get it working somewhere in the "reasoned" row, that is worth [an issue](https://github.com/Brute389/GlassPad-Linux/issues/new/choose) — not a bug
 report, just a sentence saying which compositor and whether the overlay stayed above the
 game. The row is the honest claim; a report is what turns it into the row above it.
 
 ## Install
+
+### Get the file
+
+**[GlassPad-1.1.0-x86_64.AppImage](https://github.com/Brute389/GlassPad-Linux/releases/latest/download/GlassPad-1.1.0-x86_64.AppImage)** &mdash;
+[sha256 sidecar](https://github.com/Brute389/GlassPad-Linux/releases/latest/download/GlassPad-1.1.0-x86_64.AppImage.sha256),
+[build provenance](https://github.com/Brute389/GlassPad-Linux/releases) (which commit it came from and what built it).
+All releases: [https://github.com/Brute389/GlassPad-Linux/releases](https://github.com/Brute389/GlassPad-Linux/releases).
+
+One file, about 830 KB. Verify it if you like:
+
+```bash
+sha256sum -c GlassPad-1.1.0-x86_64.AppImage.sha256
+```
+
+### Then three commands
 
 There is one install, and it is the AppImage. Everything a file can do by itself it does
 by itself; the one step that needs a password is *inside* the file rather than beside it,
@@ -107,7 +122,7 @@ chmod +x GlassPad-1.1.0-x86_64.AppImage
 ./GlassPad-1.1.0-x86_64.AppImage                      # the overlay
 ```
 
-From a checkout, the same commands are `python3 -m glasspad --install-desktop` and so on.
+From a checkout (`git clone https://github.com/Brute389/GlassPad-Linux.git`), the same commands are `python3 -m glasspad --install-desktop` and so on.
 Nothing else in this repository is an installer.
 
 There used to be a shell one. It did a third of its job redundantly, could not be used by
@@ -118,7 +133,7 @@ its `--autostart` mode did is one command of your own, and the menu entry is the
 nobody needed it:
 
 ```bash
-cp ~/.local/share/applications/glasspad.desktop ~/.config/autostart/
+cp ~/.local/share/applications/org.glasspad.GlassPad.desktop ~/.config/autostart/
 ```
 
 ### First run on a machine that has never had GlassPad
