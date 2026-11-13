@@ -242,6 +242,23 @@ RULE_NAME = "glasspad-udev.rules"
 RULE_REL = os.path.join("packaging", RULE_NAME)
 
 
+def _cwd() -> str | None:
+    """The working directory, if it still exists.
+
+    ``os.getcwd()`` does not return something harmless for a deleted directory, it raises
+    FileNotFoundError. That is a normal state for a process to be in -- a temp directory
+    cleaned up around it, an unmounted drive, a service whose WorkingDirectory was
+    removed, a shell that deleted the folder it was standing in -- and none of it has
+    anything to do with where GlassPad keeps its files. A diagnostic that crashes with a
+    traceback is worse than the bug it was called to explain, so the cwd is one candidate
+    among several, and a missing candidate is skipped.
+    """
+    try:
+        return os.getcwd()
+    except OSError:
+        return None
+
+
 def installer_roots() -> list[str]:
     """Where to look for the privileged pair: override, package root, then cwd.
 
@@ -256,7 +273,10 @@ def installer_roots() -> list[str]:
     env = os.environ.get(INSTALLER_ROOT_ENV, "").strip()
     if env:
         out.append(env)
-    out.extend((root, os.getcwd()))
+    out.append(root)
+    cwd = _cwd()
+    if cwd:
+        out.append(cwd)
     seen, uniq = set(), []
     for c in out:
         c = os.path.normpath(c)

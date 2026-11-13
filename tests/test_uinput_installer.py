@@ -856,6 +856,58 @@ def test_the_grant_script_never_leaves_its_status_to_the_last_statement():
           any("Attribute" in t and "Constant(value=0)" not in t for t in tails[-2:]))
 
 
+def test_a_deleted_working_directory_does_not_break_the_path_resolvers():
+    """``os.getcwd()`` raises for a deleted directory -- it does not shrug.
+
+    Found by running the *built* AppImage from a shell whose directory had just been
+    removed, which is a perfectly ordinary thing for a script, a manager or a cleaner to
+    leave behind:
+
+        FileNotFoundError: [Errno 2] No such file or directory
+          File ".../glasspad/bundle.py", line 259, in installer_roots
+
+    Nothing about GlassPad's files depends on the working directory existing, so nothing
+    here should either. The cwd is one candidate among several in a resolver; a candidate
+    that cannot be named is skipped, not fatal.
+    """
+    import subprocess as sp
+
+    gone = tempfile.mkdtemp(prefix="glasspad-gone-")
+    real_getcwd = os.getcwd
+    os.chdir(gone)
+    shutil.rmtree(gone)
+    os.getcwd = lambda: (_ for _ in ()).throw(FileNotFoundError(2, "No such file or directory"))
+    try:
+        roots = bundle.installer_roots()
+        check(f"installer_roots() still resolves without a cwd ({len(roots)} roots)",
+              bool(roots) and all(os.path.isdir(r) for r in roots))
+        check("the privileged script is still found", bool(bundle.find_priv_script()))
+        buf = io.StringIO()
+        calls, real_call = [], sp.call
+        sp.call = lambda cmd, *a, **k: (calls.append(list(cmd)), 0)[1]
+        try:
+            import glasspad.__main__ as m
+            with contextlib.redirect_stdout(buf):
+                rc = m.install_uinput(["--dry-run"])
+        finally:
+            sp.call = real_call
+        check(f"--install-uinput --dry-run answers instead of raising (rc={rc})", rc == 0)
+        check("and it still says what it would do",
+              any("--dry-run" in c for c in calls) or "WOULD NOT" in buf.getvalue()
+              or "dry run" in buf.getvalue())
+    finally:
+        os.getcwd = real_getcwd
+        # Leave the process where we found it. Without this the NEXT test in the file ran
+        # with a deleted cwd, and `python3 -m glasspad --help` answered "No module named
+        # glasspad" -- a failure reported against a completely unrelated behaviour, in the
+        # same file, several tests later. A test that changes the process's working
+        # directory owns the obligation to put it back.
+        try:
+            os.chdir(ROOT)
+        except OSError:
+            pass
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     crashed = 0
@@ -864,9 +916,6 @@ if __name__ == "__main__":
         try:
             fn()
         except Exception as exc:                       # noqa: BLE001
-            # A traceback is ONE failure, not the end of the run. It used to abort the
-            # loop, so the tally never printed and every test after the crash silently
-            # stopped existing -- the quietest possible way to lose coverage.
             crashed += 1
             FAILS.append(f"{fn.__name__} raised {type(exc).__name__}: {exc}")
             import traceback
