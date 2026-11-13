@@ -163,6 +163,99 @@ def icon_source() -> str | None:
     return None
 
 
+# Sizes the installer renders, and the ones the *panel* actually uses are at the small end
+# of this list.
+ICON_SIZES = (16, 22, 24, 32, 48, 64, 128, 256, 512)
+ICON_DIR = "hicolor"
+
+
+def _png_size(path: str) -> tuple[int, int] | None:
+    """Pixel dimensions of a PNG, from its header, with no image library.
+
+    The IHDR width and height are the two 32-bit big-endian fields after the signature and
+    length/type, at bytes 16..24. This is what lets the suite assert the numeric property it
+    actually cares about: a file installed into `256x256/apps` must BE 256x256.
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(24)
+    except OSError:
+        return None
+    if len(head) < 24 or not head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    wh = (int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big"))
+    # A file that starts like a PNG and declares 0x0 is a truncated or forged header, and
+    # "0x0" would satisfy no directory promise anyway. Callers treat None as "unknown",
+    # which is what they should be told.
+    return wh if wh[0] > 0 and wh[1] > 0 else None
+
+
+def render_icon(src: str, dst: str, size: int) -> str:
+    """Write `src` into `dst` at `size` pixels, and report how.
+
+    Why this exists, in one measured fact: a launcher draws a menu tile at 22-32 px and an
+    app tile at ~128 px. Copying one large PNG into `512x512/apps` therefore changes the
+    picture at exactly none of the sizes anything draws -- and the smaller copies left by an
+    earlier install keep being used. That is why "we shipped the app's artwork and refreshed
+    the icon caches" was reported, plausibly, while the menu carried on looking identical:
+    the theme was answering at sizes nobody had touched.
+
+    GdkPixbuf does the scaling (it is here: GTK 4 is a hard requirement of the overlay
+    itself). When it is somehow not importable, the fallback is a plain copy rather than a
+    refusal -- an entry with one artwork at one size still beats no icon -- and the caller
+    says which happened.
+    """
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    try:
+        import gi
+        gi.require_version("GdkPixbuf", "2.0")
+        from gi.repository import GdkPixbuf
+    except Exception:                                     # noqa: BLE001 - degrade, do not fail
+        shutil.copyfile(src, dst)
+        return "copied (no GdkPixbuf: not rescaled)"
+    try:
+        buf = GdkPixbuf.Pixbuf.new_from_file_at_scale(src, size, size, True)
+        buf.savev(dst, "png", [], [])
+    except Exception:                                     # noqa: BLE001 - corrupt source, etc.
+        shutil.copyfile(src, dst)
+        return "copied (scaling failed)"
+    return "rendered"
+
+
+def purge_icons(base: str) -> list[str]:
+    """Delete every glasspad artwork file this installer could have written, at any size.
+
+    One artwork must not live at two sizes with two different pictures. Without this, an
+    upgrade leaves the pre-upgrade copies at the sizes the panel draws, and the new artwork
+    is picked up only where the launcher happens to ask for 512.
+    """
+    gone = []
+    root = os.path.join(base, "icons", ICON_DIR)
+    for dirpath, _dirs, files in os.walk(root) if os.path.isdir(root) else []:
+        for name in files:
+            if name.startswith(ICON_NAME + ".") and os.path.basename(dirpath) == "apps":
+                try:
+                    os.remove(os.path.join(dirpath, name))
+                    gone.append(os.path.join(dirpath, name))
+                except OSError:
+                    pass
+    return gone
+
+
+def install_icons(base: str, src: str) -> tuple[list[str], list[str]]:
+    """Render the whole size set for one artwork. Returns (written, notes)."""
+    written, notes = [], []
+    for size in ICON_SIZES:
+        dst = os.path.join(base, "icons", ICON_DIR, f"{size}x{size}", "apps",
+                           ICON_NAME + ".png")
+        how = render_icon(src, dst, size)
+        written.append(dst)
+        note = f"{size}x{size}: {how}"
+        if note not in notes:
+            notes.append(note)
+    return written, notes
+
+
 def desktop_text(exec_line: str, workdir: str | None = None,
                  status_line: str | None = None) -> str:
     """The .desktop body. Field order mirrors desktop/glasspad.desktop.in.
@@ -309,9 +402,17 @@ def _write_entry_and_icon(target: str, why: str, base: str, apps: str,
     print(f"  launching: {target}  ({why})")
 
     if icon_dest:
-        os.makedirs(os.path.dirname(icon_dest), exist_ok=True)
-        shutil.copyfile(icon, icon_dest)
-        print(f"installed the icon as '{ICON_NAME}' -> {icon_dest}")
+        # Not one file at one size: purge, then render every size the theme dirs claim.
+        # See render_icon for the measured reason -- copying a single 512 PNG into a
+        # directory named 512x512 left the 22 px tile, the one a panel draws, untouched.
+        purged = purge_icons(base)
+        written, notes = install_icons(base, icon)
+        print(f"installed the icon as '{ICON_NAME}' in {len(written)} sizes "
+              f"-> {os.path.dirname(os.path.dirname(os.path.dirname(written[-1])))}")
+        for note in notes:
+            print(f"    {note}")
+        if purged:
+            print(f"    replaced {len(purged)} older copy/copies at other sizes")
     else:
         # Worth saying: an entry without an icon still launches, but it looks
         # provisional in the menu, and a provisional-looking app reads as broken.
@@ -430,13 +531,19 @@ def icon_install_paths(base: str) -> list[str]:
     takes two. Discovered while wiping a machine back to virgin, where the leftover is
     the whole point.
     """
+    # Walked, not enumerated from a list of sizes: an installer that later renders a
+    # different set must not leave artwork behind at a size nobody thought to name. That
+    # asymmetry -- install adds three files, uninstall takes two -- is how a "virgin system"
+    # test fails for reasons that look like the test's fault.
     out = []
-    for kind in ("scalable", "256x256", "512x512"):
-        for ext in (".svg", ".png"):
-            p = os.path.join(base, "icons", "hicolor", kind, "apps", ICON_NAME + ext)
-            if os.path.isfile(p):
-                out.append(p)
-    return out
+    root = os.path.join(base, "icons", ICON_DIR)
+    for dirpath, _dirs, files in os.walk(root) if os.path.isdir(root) else []:
+        if os.path.basename(dirpath) != "apps":
+            continue
+        for name in files:
+            if name.startswith(ICON_NAME + "."):
+                out.append(os.path.join(dirpath, name))
+    return sorted(out)
 
 
 def uninstall_desktop() -> int:

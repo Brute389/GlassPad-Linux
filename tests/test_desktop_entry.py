@@ -116,8 +116,17 @@ def test_install_writes_the_entry_and_icon_and_nothing_else():
         check(f"install succeeded ({r.returncode}: {r.stdout.strip()[:80]})",
               r.returncode == 0)
         made = tree(base)
-        check(f"exactly two files, an entry and an icon ({sorted(made)})",
-              len(made) == 2 and any(f.endswith(".desktop") for f in made))
+        # Was `len(made) == 2`: exactly an entry and ONE icon. That is the invariant the
+        # single-file install used, and it is what hid the real bug -- one tile at one size
+        # while the panel draws 22 px from a copy nobody replaced. The count is now
+        # entry + one tile per declared size, and nothing else, which still catches the
+        # MIME caches this check was originally written to catch.
+        expect = 1 + len(de.ICON_SIZES)
+        check(f"an entry and one tile per size, nothing else "
+              f"({len(made)} vs {expect}: {sorted(made)[:4]})",
+              len(made) == expect and any(f.endswith(".desktop") for f in made))
+        check("and no MIME caches appeared in a pristine account",
+              not [f for f in made if f.endswith(("mimeinfo.cache", "intent.cache"))])
         entry = next((os.path.join(base, f) for f in made if f.endswith(".desktop")), None)
         body = open(entry).read() if entry else ""
         check("the entry points at the AppImage, not at the sandbox tree",
@@ -497,6 +506,161 @@ def test_uninstall_takes_the_icon_too_and_leaves_everything_else():
               os.path.exists(keep))
         check("it says the layout is left alone, not the icon",
               "icon theme entry" not in r2.stdout)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+NOT_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 40      # signature, no IHDR to trust
+
+
+def _planted(home, rel):
+    path = os.path.join(home, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(NOT_PNG)
+    return path
+
+
+def _icon_root(home):
+    return os.path.join(home, ".local", "share", "icons", "hicolor")
+
+
+def _artwork(home):
+    """Every glasspad tile under the theme, as size -> path."""
+    out = {}
+    root = _icon_root(home)
+    for dirpath, _dirs, files in os.walk(root) if os.path.isdir(root) else []:
+        for f in files:
+            if f.startswith("glasspad.") and os.path.basename(dirpath) == "apps":
+                # Keyed by the SIZE directory, not the immediate parent -- whose basename is
+                # "apps" for every one of them, which collapsed nine tiles into one dict key
+                # and reported "1 of 9" for an install that had in fact written nine.
+                size = os.path.basename(os.path.dirname(dirpath))
+                out[f"{size}/{f}"] = os.path.join(dirpath, f)
+    return out
+
+
+def test_a_file_in_a_size_directory_is_that_many_pixels_wide():
+    """The one claim about icons that can be checked numerically, and never was.
+
+    "Installed the icon as 'glasspad' -> .../512x512/apps/glasspad.png" was printed while
+    the file was the 1024 px original, and -- worse -- while the tiles a launcher actually
+    draws (22 px in a panel, 32 px in a menu) came from copies three revisions old. A
+    directory named 256x256 is a promise about pixel dimensions, so the promise is checked:
+    header width and height compared against the directory each file was written to.
+    """
+    d = tempfile.mkdtemp()
+    try:
+        src = os.path.join(ROOT, "glasspad", "img", "glasspad_icon_512.png")
+        written, notes = de.install_icons(d, src)
+        check(f"one file per claimed size ({len(written)} of {len(de.ICON_SIZES)})",
+              len(written) == len(de.ICON_SIZES))
+        wrong = []
+        for path in written:
+            want = int(os.path.basename(
+                os.path.dirname(os.path.dirname(path))).split("x")[0])
+            got = de._png_size(path)
+            if got != (want, want):
+                wrong.append(f"{os.path.relpath(path, d)} is {got}, dir says {want}")
+        check(f"each tile IS the size of the directory holding it ({wrong[:2]})", not wrong)
+        check(f"nothing fell back to a blind copy ({notes})",
+              not any("copied" in n for n in notes))
+        check("the set covers the sizes a panel and a menu draw at (22, 32, 48)",
+              {22, 32, 48} <= set(de.ICON_SIZES))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_installing_replaces_artwork_at_every_size_not_just_one():
+    """A launcher picks a tile by the size it needs, not by which file is newest.
+
+    So an upgrade that writes one file at one size changes the picture at none of the sizes
+    anything draws, and the old tiles keep being used. That is why "we shipped the app's own
+    artwork and refreshed the caches" was reported -- truthfully, about one file -- while the
+    menu looked untouched. Purging first, then rendering the whole set, is the fix; this
+    test plants stale tiles at sizes and extensions the render set does not use.
+    """
+    d = tempfile.mkdtemp()
+    try:
+        keep = _planted(d, os.path.join("hicolor-foreign.png"))          # outside the tree
+        foreign = _planted(d, os.path.join(
+            ".local", "share", "icons", "hicolor", "48x48", "apps", "some-other-app.png"))
+        _planted(d, os.path.join(".local", "share", "icons", "hicolor",
+                                 "scalable", "apps", "glasspad.svg"))
+        old32 = _planted(d, os.path.join(".local", "share", "icons", "hicolor",
+                                         "32x32", "apps", "glasspad.png"))
+        gone = de.purge_icons(os.path.join(d, ".local", "share"))
+        check("the stale square tile is gone", not os.path.exists(old32))
+        check("and the stale scalable tile is gone", not os.path.exists(os.path.join(
+            d, ".local", "share", "icons", "hicolor", "scalable", "apps", "glasspad.svg")))
+        check(f"two purged, reported ({len(gone)})", len(gone) == 2)
+        check(f"another app's icon in the same directory survived ({foreign})",
+              os.path.exists(foreign))
+        check(f"nothing outside the theme was touched ({keep})", os.path.exists(keep))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_render_icon_copies_instead_of_failing_when_the_source_is_unreadable():
+    """An entry with a default icon is a cosmetic problem; no icon call is a broken install."""
+    d = tempfile.mkdtemp()
+    try:
+        bad = os.path.join(d, "not-an-icon.png")
+        with open(bad, "wb") as fh:
+            fh.write(NOT_PNG)
+        dst = os.path.join(d, "icons", "hicolor", "32x32", "apps", "glasspad.png")
+        how = de.render_icon(bad, dst, 32)
+        check(f"it still wrote something ({how})", os.path.isfile(dst))
+        check("and said it could not rescale", "copied" in how)
+        check("and the copy is byte-identical to the source",
+              open(dst, "rb").read() == NOT_PNG)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_png_size_refuses_things_that_are_not_pngs():
+    d = tempfile.mkdtemp()
+    try:
+        check("a real PNG reports a size", de._png_size(os.path.join(
+            ROOT, "glasspad", "img", "glasspad_icon_512.png")) is not None)
+        bad = os.path.join(d, "x.png")
+        with open(bad, "wb") as fh:
+            fh.write(NOT_PNG)
+        check("a truncated one reports None", de._png_size(bad) is None)
+        check("a missing one reports None", de._png_size(os.path.join(d, "no.png")) is None)
+        svg = os.path.join(ROOT, "packaging", "glasspad.svg")
+        check("an SVG reports None rather than guessing",
+              de._png_size(svg) is None if os.path.exists(svg) else True)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_the_installed_set_on_disk_is_the_size_set_with_matching_headers():
+    """End to end, through --install-desktop, because the CLI is what people run.
+
+    sandbox(), not a bare mkdtemp: the runner executes `-m glasspad` inside the directory,
+    so it needs the copied-out package there -- and an install that silently did nothing
+    would otherwise look like zero tiles rather than like a failed test setup.
+    """
+    d = sandbox()
+    img = os.path.join(d, "GlassPad.AppImage")
+    with open(img, "w") as fh:
+        fh.write("#!/bin/sh\nexit 0\n")
+    os.chmod(img, 0o755)
+    try:
+        run_in(d, ["--install-desktop"], extra_env={"APPIMAGE": img})
+        tiles = _artwork(d)
+        check(f"every size got a tile ({len(tiles)} of {len(de.ICON_SIZES)})",
+              len(tiles) == len(de.ICON_SIZES))
+        wrong = []
+        for name, path in tiles.items():
+            want = int(name.split("x")[0])       # "512x512/glasspad.png" -> 512
+            got = de._png_size(path)
+            if got != (want, want):
+                wrong.append(f"{name}: {got}")
+        check(f"and every tile matches its directory ({wrong[:2]})", not wrong)
+        r = run_in(d, ["--uninstall-desktop"], extra_env={"APPIMAGE": img})
+        check(f"uninstall clears the whole set ({sorted(_artwork(d))})", _artwork(d) == {})
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
