@@ -238,6 +238,28 @@ window.ctrl, window.hub, window.panelwin { background: transparent; }
 FILLS = S.FILLS
 
 
+# --- status-line rate limits -------------------------------------------------
+# One line per control per this interval, for readouts that stream every motion
+# event. Chosen by what is left readable in `journalctl -u app-glasspad@*`: a drag
+# still shows as a handful of lines that trace the movement, not 412 of them.
+QUIET_FLUSH_S = 0.5
+
+# Key for the "same sentence twice in a row" guard on non-streaming messages. An
+# underscore-prefixed dict key that no control can have, because control names come
+# from the layout.
+_ONE_SHOT = "\x00oneshot"
+
+
+def _log_wants_everything() -> bool:
+    """GLASSPAD_LOG=full turns folding off.
+
+    A log that hides information with no way to get it back is a bad bargain when the
+    thing being debugged might be the folding itself.
+    """
+    return (os.environ.get("GLASSPAD_LOG") or "").strip().lower() in (
+        "full", "1", "yes", "true")
+
+
 class Overlay:
     def __init__(self, service: pad.PadService, opacity: float, *,
                  edit: bool = False, layout_path: str = "",
@@ -1212,7 +1234,7 @@ class Overlay:
             self.geo[name][0], self.geo[name][1] = nx, ny
             self.place(win, nx, ny)
             self._dirty = True
-            self._say_quiet(f"{name}  {nx:.0f},{ny:.0f}")
+            self._say_quiet(f"{name}  {nx:.0f},{ny:.0f}", key=name)
             return
         # Sizing keeps proportions for every control, and the knob's opposite corner
         # is the anchor: the control grows away from where it already is, so the
@@ -1227,9 +1249,10 @@ class Overlay:
         self.place(win, st["x"], st["y"])
         self._dirty = True
         self._hud_show(name)
-        self._say_quiet(f"{name}  {nw:.0f}x{nh:.0f}")
+        self._say_quiet(f"{name}  {nw:.0f}x{nh:.0f}", key=name)
 
     def _edit_end(self, name: str) -> None:
+        self._flush_quiet(name)              # the settled geometry belongs in the log
         st = self._grab.pop(name, None)
         if st and st.get("mode") == "size":
             self._sizing = None
@@ -1585,13 +1608,61 @@ class Overlay:
         print(f"  status: {text}", flush=True)
         self._toast(text)
 
-    def _say_quiet(self, text: str) -> None:
-        """Terminal only. For the messages that repeat every motion event.
+    def _say_quiet(self, text: str, key: str = "") -> None:
+        """Terminal only, and folded. For the messages that repeat every motion event.
 
         A resize readout is already on screen showing the same numbers; toasting each
         one would replace a stable readout with a flicker.
+
+        It also used to print every one, and that turned out to matter once the app was
+        launched by something other than a terminal. Installed through Shelly, the overlay
+        runs as a systemd transient unit and stdout goes to the journal, which is then the
+        ONLY record of the run: one edit session wrote 412 lines of
+        `status: A 1494,601`, and the pad creation, the profile and any error were somewhere
+        under the coordinates. So a readout for the same control prints at most once per
+        QUIET_FLUSH_S, the updates it stands for are counted, and the settled value is
+        flushed when the drag ends -- see _flush_quiet for why that last part is not
+        optional.
+
+        Without `key`, nothing is folded: the caller said something once (a profile
+        switch, a refusal), and a rate limiter must not be allowed to swallow a sentence
+        that only ever gets said once. Pass key=<control> for telemetry that streams.
         """
+        if not key:
+            state = getattr(self, "_quiet", None) or {}
+            if state.get(_ONE_SHOT, "") == text:
+                return                     # literally the same sentence again; nothing new
+            self._quiet = {**state, _ONE_SHOT: text}
+            print(f"  status: {text}", flush=True)
+            return
+
+        state = getattr(self, "_quiet", None)
+        if state is None:
+            state = self._quiet = {}
+        last = state.get(key)
+        if last is not None and last[0] == text:
+            return                         # the value did not move; neither does the log
+        if (last is not None and not _log_wants_everything()
+                and time.monotonic() - last[1] < QUIET_FLUSH_S):
+            state[key] = (text, last[1], last[2] + 1)
+            return
+        state[key] = (text, time.monotonic(), 0)
         print(f"  status: {text}", flush=True)
+
+    def _flush_quiet(self, key: str) -> None:
+        """Print whatever folding is holding for `key`.
+
+        Rate limiting alone would drop the one number anybody cares about: where the
+        control ENDED UP, whenever a drag stopped between two ticks. The folded count is
+        printed alongside so the log says "this line stands for 37 updates" instead of
+        looking like the drag was that short.
+        """
+        state = getattr(self, "_quiet", None) or {}
+        last = state.pop(key, None)
+        if not last or not last[2]:
+            return
+        text, _at, folded = last
+        print(f"  status: {text}  (+{folded} updates folded)", flush=True)
 
     # -- the latching disable button (window.py's \u2298) ---------------------
     def _toggle_overlay_enabled(self) -> None:

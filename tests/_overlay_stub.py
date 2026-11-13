@@ -109,8 +109,22 @@ def make_overlay(*, service=None, edit: bool = False, geo=None, hold_limit: floa
     ov.place = lambda win, x, y: None
     ov._resize_surface = lambda name, w, h: None
     ov.sayings: list[str] = []
+    ov.say_keys: list[str] = []
     ov._say = ov.sayings.append
-    ov._say_quiet = ov.sayings.append
+
+    def _quiet(text: str, key: str = "") -> None:
+        """Mirror Overlay._say_quiet's signature, keyword included.
+
+        This used to be `ov.sayings.append`, which took one positional argument -- so when
+        _say_quiet grew `key=` for rate limiting, every keyed call blew up with
+        "list.append() takes no keyword arguments" inside the turbo suite, where nothing
+        about turbo had changed. A stub has to track the signature it stands in for; that
+        is the whole reason it exists.
+        """
+        ov.sayings.append(text)
+        ov.say_keys.append(key)
+
+    ov._say_quiet = _quiet
     # Visual and animation side effects, without the GLib timers behind them.
     ov._count = lambda: None
     ov._vis = lambda name, key, value: None
