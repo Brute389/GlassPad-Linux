@@ -322,6 +322,19 @@ def main(argv: list[str] | None = None) -> int:
               f"[--backend {BACKEND}]")
         print("  overlay_layer owns the remaining options; --help there lists them")
         return 0
+    # The usage line below advertises --selftest, so --selftest has to be a flag.
+    # It was not: the selftest actually lives behind GLASSPAD_SELFTEST=1 plus
+    # --null-pad -- which is exactly what tools/check_all.py passes -- and argparse
+    # had never heard of the word, so the one command this program tells you to type
+    # to check your install exited 2 with "unrecognized arguments: --selftest".
+    # Translating it here beats deleting it from the help: whatever the help prints,
+    # typing it should do. The selftest runs the overlay against /dev/null, so the
+    # translation adds --null-pad unless the caller already named one.
+    if "--selftest" in rest:
+        os.environ["GLASSPAD_SELFTEST"] = "1"
+        rest = [a for a in rest if a != "--selftest"]
+        if not any(a.startswith("--null-pad") or a.startswith("--pad") for a in rest):
+            rest.append("--null-pad")
     from glasspad.overlay_layer import main as run_layer
     code = run_layer(rest)
     if code:

@@ -12,7 +12,7 @@ Two bugs this pins down, both found on a machine where the overlay works:
 """
 import ast
 import os
-import subprocess
+import re
 import subprocess
 import sys
 
@@ -99,6 +99,78 @@ def test_report_status_is_the_layer_one_now():
     body = ast.get_source_segment(src, fn[0]) or ""
     check("it reports the layer stack", "libgtk4-layer-shell" in body)
     check("it does not report a Qt session", "QT_QPA_PLATFORM" not in body)
+
+
+def test_the_selftest_flag_does_what_the_help_prints():
+    """`--selftest` was printed in the usage line for ages without existing.
+
+    The selftest really is driven by GLASSPAD_SELFTEST=1 plus --null-pad -- that is what
+    tools/check_all.py runs -- but the human-facing sentence said `glasspad --selftest`,
+    and argparse answered "unrecognized arguments" and exited 2. So the documented way to
+    check an install was the one way that could not work, and it stayed that way because
+    every test called the env var. This probes the flag, and the guard below keeps the
+    whole usage line honest.
+    """
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    probe = (
+        "import os, sys;"
+        "sys.path.insert(0, %r);"
+        "import glasspad.overlay_layer as ol;"
+        "ol.main = lambda a: [print('ARGV', ' '.join(a)),"
+        "                       print('ENV', os.environ.get('GLASSPAD_SELFTEST', '')),"
+        "                       0][-1];"
+        "from glasspad.__main__ import main;"
+        "raise SystemExit(main(sys.argv[1:]))" % repo
+    )
+    r = subprocess.run([sys.executable, "-c", probe, "--selftest"],
+                       capture_output=True, text=True, timeout=120, cwd=repo)
+    out = r.stdout + r.stderr
+    check(f"--selftest was accepted (exit {r.returncode})", r.returncode == 0)
+    check("it turned itself into the env var the selftest reads", "ENV 1" in out)
+    check("and into --null-pad, so no real gamepad is needed",
+          "--null-pad" in out and "--selftest" not in out)
+    if os.environ.get("WAYLAND_DISPLAY"):
+        live = subprocess.run([sys.executable, "-m", "glasspad", "--selftest"],
+                              capture_output=True, text=True, timeout=300, cwd=repo)
+        tout = live.stdout + live.stderr
+        check("live: it ran the checks",
+              live.returncode == 0 and "selftest done" in tout
+              and "unrecognized" not in tout)
+        check("live: nothing failed", "FAIL" not in tout)
+
+
+def test_nothing_in_the_usage_line_is_a_flag_that_does_not_exist():
+    """A flag in the help text is a promise; argparse rejecting it breaks the promise.
+
+    Every option printed by `usage: glasspad [...]` must either be one argparse knows
+    (read from the real --help of the module that owns the rest) or be probed in this
+    file. --selftest sat advertised-and-absent until someone typed it, because nothing
+    read the help line against the parser.
+    """
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(repo, "glasspad", "__main__.py"), encoding="utf-8").read()
+    usage = src.split("usage: glasspad", 1)[1].split('")', 1)[0]
+    advertised = set(re.findall(r"--[a-z][a-z0-9-]*", usage))
+    check("the usage line advertises something to check", len(advertised) >= 5)
+
+    h = subprocess.run([sys.executable, "-m", "glasspad.overlay_layer", "--help"],
+                       capture_output=True, text=True, timeout=120, cwd=repo)
+    known = set(re.findall(r"--[a-z][a-z0-9-]*", h.stdout))
+    check(f"overlay_layer's own --help was readable ({len(known)} options)",
+          h.returncode == 0 and len(known) > 5)
+
+    # A flag is "real" if argparse in overlay_layer accepts it, or if this file branches
+    # on it -- `"--install-uinput" in rest`, `rest[0] in ("--status", ...)`. Branch lines
+    # are the proof: the usage f-string itself mentions every advertised word, so
+    # counting literals would pass by construction and catch nothing, which is precisely
+    # how --selftest stayed broken.
+    dispatched: set[str] = set()
+    for line in src.splitlines():
+        if "in rest" in line or "rest[0]" in line or "rest and" in line:
+            dispatched.update(re.findall(r"--[a-z][a-z0-9-]*", line))
+    check(f"the wrapper branches on some flags ({len(dispatched)})", bool(dispatched))
+    unbacked = sorted(a for a in advertised if a not in known and a not in dispatched)
+    check(f"every advertised flag is real or probed here ({unbacked[:4]})", not unbacked)
 
 
 def test_cli_flags_never_start_the_overlay():
