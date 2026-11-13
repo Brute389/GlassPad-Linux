@@ -18,6 +18,30 @@ zone mapping, `ToHM()` normalisation, layout format, resting state — is
 preserved from the original. A `layout.json` written by the Windows app loads
 here unchanged.
 
+## What it looks like
+
+![The default layout: triggers along the top, dpad and left stick at the left, ABXY and right stick at the right, system buttons bottom-centre](docs/img/overlay-default.png)
+
+The built-in layout, as it lands on a 2560x1600 panel: shoulders and triggers along the
+top, dpad and left stick under the left thumb, the ABXY cluster and right stick under the
+right, and the small system buttons bottom-centre where the palm goes. Not a mock-up — a
+screenshot of the running overlay, and the control geometry is measured from frames like
+this one (see [Feedback you can see](#feedback-you-can-see-and-a-layout-you-cannot-lose)).
+
+![Edit mode: every control gains a grip ring and becomes draggable](docs/img/edit-mode.png)
+
+`--edit` unlocks it. The change is quiet by design — a thin grip ring on each control,
+which is what tells you the one under your thumb is now movable — and saving writes
+`~/.config/GlassPad/layout.json`. Positions are stored as fractions of the screen, and a
+layout records the size it was authored on, so the same file refits itself when you rotate
+the tablet or move to another monitor.
+
+Both frames are shot over a plain dark window rather than a working desktop, on purpose: a
+screenshot for a README should show the software, and not somebody's wallpaper, pinned
+apps or the files sitting on their desktop. To re-shoot them, `tools/shot_stage.py` holds
+up the window and `spectacle -b -n -o shot.png` takes the picture; the recipe, and the
+fullscreen mistake it replaced, are in that tool's docstring.
+
 ## Requirements
 
 * **Python 3 with GObject introspection, GTK 4, and `libgtk4-layer-shell`.** These are
@@ -760,9 +784,9 @@ What works instead:
 | `tools/uinput_watch.py` | Snapshots kernel input devices and reports any pad a test leaked. `run -- <cmd>` wraps the suite so nothing hides between steps. |
 | `tools/run_tests.py` | Runs the pytest-style suite with no pytest installed, including the uinput-safety legs. `check_all.py` calls it; you rarely need to. |
 | `tools/check_all.py` | Every suite plus the live self-test; exit status is real, and a suite that cannot start counts as failing. |
-| `tools/make_appimage.sh` | Stage the AppDir (validated desktop entry, `AppRun`), run it, then pack; cleans its own scratch on success. |
 | `tools/make_appimage.sh` | Stage the AppDir (validated desktop entry, `AppRun`), run it, then pack if the tooling exists — and say plainly what is missing when it does not. |
 | `tools/glasspad-profile` | Claim a profile for the overlay (`--seed`, `--list`, `--status`, `--clear`). Exits 0 unless the *arguments* were wrong — a launcher must never fail because of the overlay. |
+| `tools/shot_stage.py` | A plain dark window to photograph the overlay against. Its reason for existing is in its docstring: shooting the overlay over a working desktop publishes somebody's files, and the first version used `fullscreen()`, which made the overlay vanish -- KWin raises fullscreen windows above layer-shell surfaces, the same rule that swallows the overlay in an exclusive-fullscreen game. |
 | `tools/mk_appimage_offline.py` | Pack a staged AppDir into a real type-2 `.AppImage`, using the package-owned `mksquashfs` and the pinned AppImageKit runtime (borrowing only as a fallback, and announced when it happens), checking the payload offset and writing BUILD-INFO plus the sha256 sidecar. |
 
 Also here, and deliberately: the tree holds only what is needed to build, install

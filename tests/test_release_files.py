@@ -301,6 +301,108 @@ def test_facing_files_do_not_cite_the_deleted_installer_as_present():
     check(f"no facing file tells a reader to run install.sh ({offenders})", not offenders)
 
 
+
+# --- the pictures ------------------------------------------------------------
+def _slug(heading: str) -> str:
+    """GitHub's anchor rule, applied to a heading: lowercase, punctuation dropped,
+    spaces to hyphens. Emoji and backticks go with them -- decoration in a heading,
+    invisible in a URL."""
+    out = re.sub(r"[^a-z0-9 -]", "", heading.lower())
+    return re.sub(r"[ -]+", "-", out).strip("-")
+
+
+def _readme_headings(text: str) -> set:
+    heads, in_code = set(), False
+    for line in text.splitlines():
+        if line.strip().startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+        m = re.match(r"#{1,6}\s+(.*?)\s*$", line)
+        if m:
+            heads.add(_slug(m.group(1)))
+    return heads
+
+
+def test_readmes_own_links_resolve_either_in_the_tree_or_on_the_page():
+    """Two ways a README link dies silently: the file moves, or a heading gets reworded.
+
+    Neither shows up as a broken build, because markdown is not compiled -- the reader
+    just clicks something that goes nowhere, in the one document that is supposed to
+    explain the software. So both kinds are checked: relative paths against the tree,
+    and `#anchors` against the headings that actually exist on the page.
+    """
+    text = read("README.md")
+    heads = _readme_headings(text)
+    targets = re.findall(r"!\[[^\]]*\]\(([^)\s]+)", text)
+    targets += re.findall(r"(?<!!)\[[^\]]*\]\(([^)\s]+)", text)
+    broken_paths, broken_anchors = [], []
+    for t in targets:
+        if t.startswith(("http://", "https://", "mailto:")):
+            continue
+        if t.startswith("#"):
+            if t[1:] not in heads:
+                broken_anchors.append(t)
+        elif not os.path.exists(os.path.join(ROOT, t.split("#")[0])):
+            broken_paths.append(t)
+    check(f"every relative link in README resolves to a file ({broken_paths[:3]})",
+          not broken_paths)
+    check(f"every #anchor in README names a heading on the page ({broken_anchors[:3]})",
+          not broken_anchors)
+    check(f"the scan found links to check at all ({len(targets)})", len(targets) > 5)
+
+
+def test_the_pictures_are_pictures_and_not_four_megabyte_mistakes():
+    """A repository's screenshots are the one binary asset people add without thinking.
+
+    Bounds, not aesthetics: PNG rather than a JPEG of flat-colour UI (which smears the
+    labels), wide enough to read those labels, and a total that keeps a clone cheap. The
+    ceiling is deliberately generous -- it exists to catch the 4 MB lossless grab, not to
+    argue about 60 KB.
+    """
+    text = read("README.md")
+    shots = re.findall(r"!\[[^\]]*\]\(([^)\s]+)", text)
+    check(f"the README links at least one picture ({len(shots)})", len(shots) >= 1)
+    total, problems = 0, []
+    for rel in shots:
+        path = os.path.join(ROOT, rel)
+        if not os.path.isfile(path):
+            problems.append(f"{rel}: missing")
+            continue
+        size = os.path.getsize(path)
+        total += size
+        if open(path, "rb").read(8) != b"\x89PNG\r\n\x1a\n":
+            problems.append(f"{rel}: not a PNG")
+        if size > 600 * 1024:
+            problems.append(f"{rel}: {size // 1024} KB")
+        try:
+            import struct
+            w, _h = struct.unpack(">II", open(path, "rb").read(24)[16:24])
+            if w < 900:
+                problems.append(f"{rel}: only {w}px wide, labels unreadable")
+        except Exception as exc:                         # noqa: BLE001
+            problems.append(f"{rel}: unreadable ({exc})")
+    check(f"every picture is a readable PNG within budget ({problems})", not problems)
+    check(f"the whole picture set is under 1.5 MB ({total // 1024} KB)",
+          total < 1500 * 1024)
+
+
+def test_pictures_are_described_not_decorated():
+    """Alt text on a screenshot is not for search engines.
+
+    It is the sentence a screen reader gets, and the one that survives when the image
+    fails to load on a slow connection -- which, for a project whose pitch is "this is
+    what it looks like", is the pitch failing.
+    """
+    text = read("README.md")
+    alts = re.findall(r"!\[([^\]]*)\]", text)
+    check(f"every picture has alt text ({len(alts)} pictures)",
+          bool(alts) and all(a.strip() for a in alts))
+    check("and each says what is in the frame, rather than `screenshot`",
+          all(len(a.split()) >= 3 for a in alts))
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

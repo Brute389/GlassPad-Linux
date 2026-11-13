@@ -912,7 +912,11 @@ class TestDocPointers:
     # ~/.local/share/applications -- ours AND a manager's. Shelly writes our application's
     # entry as `glasspad.desktop`, so that bare name is now load-bearing prose in
     # desktop_entry.py; it names a file on the user's disk, not one a reader can open here.
-    RUNTIME = {"layout.json", "glasspad.desktop", "org.glasspad.GlassPad.desktop"}
+    RUNTIME = {"layout.json", "glasspad.desktop", "org.glasspad.GlassPad.desktop",
+               # The name a screenshot recipe hands to `spectacle -o`. It is whatever the
+               # person shooting chooses, written wherever they choose; it is not a file
+               # this repository owes anyone.
+               "shot.png"}
     # Removed on purpose, and still cited by name in the code that replaced them:
     # "parity with window.py's _toggle_edit" is telling you WHICH behaviour was copied,
     # which is the useful half of the sentence. Rewriting 18 such comments to say
