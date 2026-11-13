@@ -158,6 +158,17 @@ def test_extracted_contents_match_the_source_tree():
                     "usr/share/glasspad/packaging/glasspad-udev.rules",
                     "usr/share/doc/glasspad/PACKAGING.txt"):
             check(f"contains {rel}", os.path.exists(os.path.join(root, rel)))
+        # The shipped README is a document with links in it. `docs/NOTES.md` in that README
+        # resolves inside the image or it resolves nowhere, so the notes have to have been
+        # packed beside it -- a "read more" that points at an unpacked file is worse than
+        # no pointer, because the reader assumes the document exists somewhere.
+        shipped_readme = os.path.join(root, "usr/share/doc/glasspad/README.md")
+        notes = os.path.join(root, "usr/share/doc/glasspad/docs/NOTES.md")
+        check("the packed README points at the notes",
+              "docs/NOTES.md" in open(shipped_readme, encoding="utf-8").read())
+        check("and the notes were packed beside it", os.path.isfile(notes))
+        check("and they are the notes, not a stub",
+              len(open(notes, encoding="utf-8").read().splitlines()) > 400)
         check("no shell installer came back",
               not os.path.exists(os.path.join(root, "usr/share/glasspad/install.sh")))
         # Not merely present: the staged pair must be resolvable together the way the

@@ -325,32 +325,119 @@ def _readme_headings(text: str) -> set:
     return heads
 
 
-def test_readmes_own_links_resolve_either_in_the_tree_or_on_the_page():
-    """Two ways a README link dies silently: the file moves, or a heading gets reworded.
+def _md_pages():
+    """Every prose page that ships: the front door and the archaeology beside it."""
+    pages = {"README.md": read("README.md")}
+    if os.path.isfile(os.path.join(ROOT, "docs", "NOTES.md")):
+        pages["docs/NOTES.md"] = read("docs", "NOTES.md")
+    return pages
 
-    Neither shows up as a broken build, because markdown is not compiled -- the reader
-    just clicks something that goes nowhere, in the one document that is supposed to
-    explain the software. So both kinds are checked: relative paths against the tree,
-    and `#anchors` against the headings that actually exist on the page.
+
+_HEADING_CACHE = {}
+
+
+def _headings_of(rel):
+    """Slugs of the headings in a markdown file -- computed once per run."""
+    if rel not in _HEADING_CACHE:
+        _HEADING_CACHE[rel] = _readme_headings(read(rel) if os.path.isabs(rel)
+                                               else read(*rel.split("/")))
+    return _HEADING_CACHE[rel]
+
+
+def test_every_link_in_the_docs_resolves_to_a_file_and_an_anchor():
+    """Two ways a documentation link dies silently: the file moves, or a heading is reworded.
+
+    Neither breaks a build, because markdown is not compiled -- the reader just clicks
+    something that goes nowhere, in the one document meant to explain the software. Three
+    target shapes are checked, because the split into README + docs/NOTES.md created the
+    third one: `#anchor` must exist on the same page, `file.md` must exist, and
+    `file.md#anchor` must do both. A cross-file anchor is the fragile kind -- it survives
+    the file being renamed by nobody and the heading being reworded by accident.
     """
-    text = read("README.md")
-    heads = _readme_headings(text)
-    targets = re.findall(r"!\[[^\]]*\]\(([^)\s]+)", text)
-    targets += re.findall(r"(?<!!)\[[^\]]*\]\(([^)\s]+)", text)
     broken_paths, broken_anchors = [], []
-    for t in targets:
-        if t.startswith(("http://", "https://", "mailto:")):
-            continue
-        if t.startswith("#"):
-            if t[1:] not in heads:
-                broken_anchors.append(t)
-        elif not os.path.exists(os.path.join(ROOT, t.split("#")[0])):
-            broken_paths.append(t)
-    check(f"every relative link in README resolves to a file ({broken_paths[:3]})",
+    checked = 0
+    for page, text in _md_pages().items():
+        page_dir = os.path.dirname(os.path.join(ROOT, page))
+        targets = re.findall(r"!\[[^\]]*\]\(([^)\s]+)", text)
+        targets += re.findall(r"(?<!!)\[[^\]]*\]\(([^)\s]+)", text)
+        for t in targets:
+            if t.startswith(("http://", "https://", "mailto:")):
+                continue
+            checked += 1
+            path, _, anchor = t.partition("#")
+            if not path:                                   # same-page anchor
+                if anchor and anchor not in _readme_headings(text):
+                    broken_anchors.append(f"{page}{t}")
+                continue
+            where = path if os.path.isabs(path) else os.path.normpath(
+                os.path.join(page_dir, path))
+            if not os.path.exists(where):
+                broken_paths.append(f"{page} -> {t}")
+                continue
+            if anchor:                                     # file + anchor
+                rel = os.path.relpath(where, ROOT)
+                if rel.endswith(".md") and anchor not in _headings_of(rel):
+                    broken_anchors.append(f"{page} -> {t}")
+    check(f"every relative link in the docs resolves to a file ({broken_paths[:3]})",
           not broken_paths)
-    check(f"every #anchor in README names a heading on the page ({broken_anchors[:3]})",
+    check(f"every anchor names a heading that exists ({broken_anchors[:6]})",
           not broken_anchors)
-    check(f"the scan found links to check at all ({len(targets)})", len(targets) > 5)
+    check(f"the scan found links to check at all ({checked})", checked > 15)
+
+
+def test_the_split_holds_short_readme_long_notes():
+    """The README is the download-facing document, and it has to stay that way.
+
+    It grew to 1,272 lines by accumulating reasoning that a person installing a gamepad
+    overlay does not need at 11pm: type-2 AppImage offsets, how the packaging tool borrows
+    mksquashfs, the history of a Qt backend nobody ships. All of it is kept -- in
+    docs/NOTES.md -- because every paragraph there records a real machine and a real
+    failure. The ceiling is not about brevity for its own sake: a document you cannot
+    skim is a document nobody reads, and the sections a reader needs fast (install,
+    status, troubleshooting, environment variables) must be reachable in one scroll.
+    """
+    readme = read("README.md")
+    notes = read("docs", "NOTES.md")
+    n_readme, n_notes = len(readme.splitlines()), len(notes.splitlines())
+    check(f"README stays under 750 lines ({n_readme})", n_readme < 750)
+    check(f"NOTES exists and holds the moved material ({n_notes} lines)", n_notes > 400)
+    # ...and says so in a heading a scanner finds, not only in a passing sentence.
+    pointer = [h for h in re.findall(r"^## (.*)$", readme, re.M)
+               if "long version" in h.lower() or "notes" in h.lower()]
+    check(f"and the README has a heading pointing at the long version ({pointer})",
+          bool(pointer) and "docs/NOTES.md" in readme)
+    # The moved chapters must not have been left behind in both places: one copy each.
+    for marker in ("### Type-2 internals", "### Where the privileged half lives",
+                   "### Why nothing from the host is bundled",
+                   "### A third way: a screen pixel diff"):
+        check(f"{marker!r} lives in NOTES only",
+              marker in notes and marker not in readme)
+    # Sections a reader needs fast stay on the front door, not filed away.
+    for section in ("## Install", "## Check your tree", "## Troubleshooting",
+                    "## Environment variables", "## Tested on", "## Known limits"):
+        check(f"{section} is still in the README", section in readme)
+
+
+def test_notes_contents_table_matches_the_headings_it_claims():
+    """docs/NOTES.md opens with a table of contents, which is a promise about its own
+    headings -- the one part of a document that goes stale when someone reworded a
+    heading eight months ago and never touched the list at the top."""
+    notes = read("docs", "NOTES.md")
+    toc = notes.split("## Contents", 1)
+    if len(toc) < 2:
+        check("NOTES has a Contents list", False)
+        return
+    check("NOTES has a Contents list", True)
+    toc = toc[1].split("\n---", 1)[0]
+    links = re.findall(r"\((#[a-z0-9-]+)\)", toc)
+    check(f"the contents list names sections ({len(links)})", len(links) >= 6)
+    heads = _readme_headings(notes)
+    dead = [a for a in links if a[1:] not in heads]
+    check(f"every contents entry names a heading that exists ({dead})", not dead)
+    # ...and the reverse, so the table cannot quietly omit a chapter.
+    top = [ _slug(m) for m in re.findall(r"^## (?!Contents)(.*)$", notes, re.M)]
+    unlisted = [h for h in top if f"#{h}" not in links]
+    check(f"every chapter is listed in the contents ({unlisted})", not unlisted)
 
 
 def test_the_pictures_are_pictures_and_not_four_megabyte_mistakes():

@@ -103,6 +103,10 @@ cp -r glasspad "$appdir/usr/share/glasspad/glasspad"
 find "$appdir/usr/share/glasspad" -name '__pycache__' -type d -prune -exec rm -rf {} +
 cp tools/glasspad-profile "$appdir/usr/bin/glasspad-profile"
 cp README.md "$appdir/usr/share/doc/glasspad/README.md"
+# The README links to the notes; shipping one without the other means the file inside the
+# AppImage points at a document that was never packed.
+mkdir -p "$appdir/usr/share/doc/glasspad/docs"
+cp docs/NOTES.md "$appdir/usr/share/doc/glasspad/docs/NOTES.md"
 # The `[ -f ... ] && cp ... || true` shape here swallowed every failure: a build with
 # no licence copied, no error, and a binary that cannot answer "under what terms?".
 # These are conditions of distribution, so they abort instead.

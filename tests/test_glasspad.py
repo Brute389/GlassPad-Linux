@@ -906,7 +906,7 @@ class TestDocPointers:
     # fire is the most useful kind of pointer there is. It should resolve, not be
     # exempted.
     LOOKUP = (ROOT / "glasspad", ROOT / "desktop", ROOT / "licenses",
-              ROOT / "tests", ROOT / "tools", ROOT / "packaging", ROOT)
+              ROOT / "tests", ROOT / "tools", ROOT / "packaging", ROOT / "docs", ROOT)
     # Written at runtime in the user's own directories, never shipped and never expected
     # in this tree: layout.json in ~/.config/GlassPad, and the menu entries that live in
     # ~/.local/share/applications -- ours AND a manager's. Shelly writes our application's
@@ -1014,22 +1014,37 @@ class TestDocPointers:
     # module that does not exist: precise-looking, wrong, and invisible to a guard that
     # only reads bare names.
     QUALIFIED = re.compile(r"(?<![\w./-])((?:glasspad|tools|tests|licenses|packaging|"
-                           r"desktop)/[A-Za-z0-9_./-]+\.(?:py|sh|md|txt|in|rules|json|"
+                           r"desktop|docs)/[A-Za-z0-9_./-]+\.(?:py|sh|md|txt|in|rules|json|"
                            r"png|svg|desktop))\b")
     # Removed on purpose and cited as history in the prose that replaced them. Same
     # reasoning as HISTORICAL, one layer up: the sentence is telling you what used to
     # exist, and "see git history" is the worse version of that sentence.
     RETIRED_PATHS = {"tools/make_bundle.py", "tools/verify.sh"}
 
-    def test_qualified_paths_in_the_readme_lead_somewhere(self):
-        readme = (self.ROOT / "README.md").read_text(encoding="utf-8")
-        found = set(self.QUALIFIED.findall(readme))
-        assert len(found) >= 10, f"the scan matched almost nothing: {sorted(found)}"
+    def _doc_pages(self):
+        """Every prose page that ships with the code, not just the front door.
+
+        The split moved the archaeology to docs/NOTES.md; a pointer that moved with it is
+        exactly as capable of pointing at nothing, and more likely to be followed by the
+        person debugging at midnight.
+        """
+        pages = {"README.md": (self.ROOT / "README.md").read_text(encoding="utf-8")}
+        notes = self.ROOT / "docs" / "NOTES.md"
+        if notes.is_file():
+            pages["docs/NOTES.md"] = notes.read_text(encoding="utf-8")
+        return pages
+
+    def test_qualified_paths_in_the_docs_lead_somewhere(self):
+        found = set()
+        for name, text in self._doc_pages().items():
+            hits = set(self.QUALIFIED.findall(text))
+            found |= hits
+            assert len(hits) >= 5, f"{name} matched almost nothing: {sorted(hits)}"
         dead = [rel for rel in sorted(found)
                 if rel not in self.RETIRED_PATHS
                 and rel.split("/")[-1] not in self.HISTORICAL
                 and not (self.ROOT / rel).is_file()]
-        assert not dead, [f"README points at {d}" for d in dead]
+        assert not dead, [f"the docs point at {d}" for d in dead]
 
     def test_the_qualified_scan_is_not_vacuous(self):
         got = set(self.QUALIFIED.findall(
