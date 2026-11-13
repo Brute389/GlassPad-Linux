@@ -432,12 +432,15 @@ def test_a_deliberate_null_pad_stays_quiet():
 
 
 # --- what ships --------------------------------------------------------------
-def test_the_appimage_ships_the_privileged_script_and_the_rule():
-    """A bundle without these is a download that cannot finish installing.
+def test_the_builder_stages_the_privileged_pair():
+    """What the builder must do, checked in the builder.
 
-    Checked against make_appimage.sh's staging loop, so this fails when the list changes
-    rather than only when somebody happens to build an artefact -- and, when the payload
-    can be listed, checked inside it too.
+    The bytes INSIDE a built image are pinned by
+    tests/test_appimage_artifact.py instead, and the split is not tidiness: the builder
+    runs this suite before it packs, so a check here on the packed payload could only be
+    satisfied by the previous build's file. That is how stale packaging produced wrong
+    conclusions twice during the offline builder's development -- once green for a payload
+    a revision behind, once red for a file that had not been written yet.
     """
     script = open(os.path.join(ROOT, "tools", "make_appimage.sh")).read()
     check("the AppImage builder stages the rule",
@@ -447,21 +450,8 @@ def test_the_appimage_ships_the_privileged_script_and_the_rule():
           '$appdir/usr/share/glasspad/$priv' in script)
     check("the privileged script travels inside the package copy",
           'cp -r glasspad "$appdir/usr/share/glasspad/glasspad"' in script)
-
-    appimage = sorted(__import__("glob").glob(
-        os.path.join(ROOT, "dist", "GlassPad-*.AppImage")))
-    from _payload import paths_in          # why not unsquashfs: see that module's docstring
-    with tempfile.TemporaryDirectory() as tmp:
-        ok, paths, note = paths_in(appimage[-1] if appimage else "", tmp)
-        if not ok:
-            check(f"payload not inspectable here ({note}); contents not listed", True)
-            return
-        check("the privileged script is inside the packed payload",
-              "usr/share/glasspad/glasspad/uinput_setup.py" in paths)
-        check("the udev rule is inside the packed payload",
-              "usr/share/glasspad/packaging/" + bundle.RULE_NAME in paths)
-        check("and no shell installer came back",
-              "usr/share/glasspad/install.sh" not in paths)
+    check("and the .run-era installer is not staged anywhere",
+          "install.sh" not in script)
 
 
 # --- the undo ----------------------------------------------------------------

@@ -146,8 +146,38 @@ def test_extracted_contents_match_the_source_tree():
             return
         for rel in ("AppRun", "GlassPad.desktop", "usr/bin/glasspad-profile",
                     "usr/share/glasspad/glasspad/overlay_layer.py",
+                    # The privileged pair. A bundle without these is a download that
+                    # cannot finish installing: it can draw controls and grant nothing,
+                    # which is the failure a newcomer cannot distinguish from a broken
+                    # app. They are checked HERE rather than in the installer suite
+                    # because the builder runs that suite BEFORE packing, and a check on
+                    # the bytes inside the image cannot pass before the image exists --
+                    # the stale artefact from the previous build would either fail the
+                    # gate or, worse, vouch for a payload that is a revision behind.
+                    "usr/share/glasspad/glasspad/uinput_setup.py",
+                    "usr/share/glasspad/packaging/glasspad-udev.rules",
                     "usr/share/doc/glasspad/PACKAGING.txt"):
             check(f"contains {rel}", os.path.exists(os.path.join(root, rel)))
+        check("no shell installer came back",
+              not os.path.exists(os.path.join(root, "usr/share/glasspad/install.sh")))
+        # Not merely present: the staged pair must be resolvable together the way the
+        # runtime resolves them, or the grant dies on a stranger's machine with "rule
+        # file not found" -- the one error the script refuses to work around.
+        script = os.path.join(root, "usr/share/glasspad/glasspad/uinput_setup.py")
+        if os.path.isfile(script):
+            sys.path.insert(0, os.path.join(root, "usr/share/glasspad"))
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location(
+                    "packed_uinput_setup", script)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                found = mod.find_rule()
+                check(f"the packed script finds the packed rule ({found})",
+                      bool(found) and found.endswith("glasspad-udev.rules")
+                      and os.path.isfile(found))
+            finally:
+                sys.path.remove(os.path.join(root, "usr/share/glasspad"))
         check("AppRun is executable in the image",
               os.access(os.path.join(root, "AppRun"), os.X_OK))
 
