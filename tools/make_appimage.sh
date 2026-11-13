@@ -57,7 +57,7 @@ cleanup_staging() {
     echo "    keeping the AppDir and scratch (GLASSPAD_KEEP_STAGING=1)"
     return
   fi
-  rm -rf "$appdir" "$dist/payload.sqsh" "$dist/runtime-borrowed"
+  rm -rf "$appdir" "$dist/payload.sqsh" "$dist/runtime-active" "$dist/runtime-borrowed"
   echo "    staging cleaned; GLASSPAD_KEEP_STAGING=1 keeps it for inspection"
 }
 arch=$(uname -m)
@@ -336,8 +336,14 @@ if [ "${GLASSPAD_NO_BORROW:-0}" != "1" ] && ! command -v appimagetool >/dev/null
   # than declaring the job impossible. It prints exactly which binaries it borrowed.
   echo "    no appimagetool; trying the offline route"
   if python3 "$root/tools/mk_appimage_offline.py"; then
-    echo "    (the runtime and mksquashfs were borrowed -- see the lines above;"
-    echo "     install squashfs-tools + appimagetool to stop depending on that)"
+    # Only warn when something WAS borrowed: the builder prints its own provenance, and a
+    # standing warning that fires on a clean pinned build teaches people to ignore warnings.
+    if grep -q "BORROWED\|borrowed" "$dist/BUILD-INFO.txt" 2>/dev/null; then
+      echo "    WARNING: something in this build was borrowed, not pinned -- see"
+      echo "    $dist/BUILD-INFO.txt (runtime origin / mksquashfs pkg). A release"
+      echo "    artefact should name both; install squashfs-tools and let the builder"
+      echo "    fetch the pinned runtime from packaging/runtime-pin.json."
+    fi
     cleanup_staging
     exit 0
   fi

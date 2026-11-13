@@ -22,11 +22,14 @@ here writes outside dist/.
 from __future__ import annotations
 
 import errno
+import hashlib
+import json
 import os
 import shutil
 import struct
 import subprocess
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HSQS = b"hsqs"
@@ -53,6 +56,222 @@ def find_mksquashfs() -> tuple[str | None, str]:
             return h, "borrowed from a local bundle"
     return None, "not found"
 
+# --- the runtime half -------------------------------------------------------
+#
+# An AppImage is [runtime ELF][squashfs], and the runtime is a binary we do not build.
+# Until now it was carved out of whichever .AppImage happened to be on this machine,
+# which had two consequences: the deliverable contained an unversioned binary of unknown
+# origin, and rebuilding required this specific laptop with those specific apps installed.
+# So the runtime is pinned -- upstream URL, sha256, size -- and the build verifies what it
+# appends against that pin, in this order:
+#
+#   $GLASSPAD_RUNTIME    an explicit file, refused if it contradicts the pin
+#   ~/.cache/glasspad-build/runtime-x86_64    the cached download, hash-checked
+#   the pin URL          fetched once, cached, hash-checked
+#   a local .AppImage    last resort, announced as borrowed, because that is what it is
+RUNTIME_PIN = os.path.join(ROOT, "packaging", "runtime-pin.json")
+RUNTIME_CACHE = os.path.expanduser("~/.cache/glasspad-build/runtime-x86_64")
+# The donors used before the pin existed. Kept so an offline rebuild is still possible --
+# not as the normal path, because a runtime borrowed from someone else's application is
+# precisely the thing a release ought to be able to name the version of.
+DONORS = ("~/.local/bin/StabilityMatrix.AppImage",
+          "~/.local/bin/tether_x86_64.AppImage",
+          "~/retrodeck/storage/Eden.AppImage")
+
+
+def sha256_of(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def load_pin(path: str = RUNTIME_PIN):
+    """The recorded runtime, or None when the checkout makes no claim about it.
+
+    No pin is not the same as a bad pin. Absence means "nothing recorded", and the build
+    says so and carries on. A pin that does NOT match stops the build, because stopping is
+    the only reason to write a hash down.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            pin = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not (isinstance(pin, dict) and pin.get("sha256") and pin.get("url")):
+        return None
+    return pin
+
+
+def matches_pin(path: str, pin) -> bool:
+    if not pin:
+        return False
+    size = pin.get("size")
+    if size and os.path.getsize(path) != int(size):
+        return False
+    return sha256_of(path) == str(pin.get("sha256", "")).lower()
+
+
+def _fetch(url: str, dest: str, timeout: int = 120) -> bool:
+    """Download under a temporary name, so a dead link cannot leave a truncated runtime.
+
+    A half-downloaded runtime is the worst input this build can have: it is a valid ELF,
+    it appends cleanly, and the image only fails to boot on someone else's machine.
+    """
+    import urllib.error
+    import urllib.request
+    tmp = dest + ".part"
+    try:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        req = urllib.request.Request(url, headers={"User-Agent": "glasspad-build"})
+        with urllib.request.urlopen(req, timeout=timeout) as r, open(tmp, "wb") as out:
+            shutil.copyfileobj(r, out)
+        os.replace(tmp, dest)
+        os.chmod(dest, 0o755)
+        return True
+    except (urllib.error.URLError, OSError) as exc:
+        sys.stderr.write(f"  runtime download failed: {exc}\n")
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def acquire_runtime(dest: str):
+    """(path, provenance) -- the provenance string is printed AND written to BUILD-INFO.
+
+    Deliberately not a silent chain of fallbacks: whichever rung produced the runtime ends
+    up in the text file that ships beside the artefact, so "runtime-active, origin BORROWED
+    from StabilityMatrix.AppImage" is visible to whoever has to stand behind the build.
+    """
+    pin = load_pin()
+
+    want = os.environ.get("GLASSPAD_RUNTIME")
+    if want:
+        want = os.path.expanduser(want)
+        if not os.path.isfile(want):
+            raise SystemExit(f"$GLASSPAD_RUNTIME points at nothing: {want}")
+        if pin and not matches_pin(want, pin):
+            raise SystemExit(
+                f"$GLASSPAD_RUNTIME does not match packaging/runtime-pin.json\n"
+                f"    file: {want}\n"
+                f"    got:  {sha256_of(want)}\n"
+                f"    pin:  {pin['sha256']}\n"
+                "Refusing to build an artefact whose runtime is not the one the tree "
+                "claims. Change the pin deliberately -- hash, release, date -- rather "
+                "than pointing the environment variable past it.")
+        return want, ("explicit $GLASSPAD_RUNTIME"
+                      + (", matches the pin" if pin else " (no pin on file)"))
+
+    if pin:
+        if os.path.isfile(RUNTIME_CACHE):
+            if matches_pin(RUNTIME_CACHE, pin):
+                shutil.copyfile(RUNTIME_CACHE, dest)
+                os.chmod(dest, 0o755)
+                return dest, (f"pinned AppImageKit {pin.get('release', '?')} runtime "
+                              "from cache, sha256 verified")
+            print("  note: the cached runtime does not match the pin; re-fetching")
+        if _fetch(pin["url"], RUNTIME_CACHE) and matches_pin(RUNTIME_CACHE, pin):
+            shutil.copyfile(RUNTIME_CACHE, dest)
+            os.chmod(dest, 0o755)
+            return dest, (f"pinned AppImageKit {pin.get('release', '?')} runtime, "
+                          "fetched and sha256 verified")
+        print("  note: could not obtain the pinned runtime; falling back to a local one")
+
+    donor, tried = None, []
+    for cand in (os.path.expanduser(c) for c in DONORS):
+        if not os.path.isfile(cand):
+            continue
+        try:
+            extract_runtime(cand, dest)
+            donor = cand
+            break
+        except SystemExit as exc:
+            tried.append(f"{os.path.basename(cand)}: {exc}")
+    if donor is None:
+        raise SystemExit(
+            "no usable runtime: the pinned download failed and no local AppImage had "
+            "one.\n    " + "\n    ".join(tried or ["no candidate AppImages present"]))
+    return dest, (f"BORROWED from {os.path.basename(donor)} -- NOT the pinned runtime, "
+                  "so this artefact's runtime is unversioned")
+
+
+def _git(*args: str) -> str:
+    r = subprocess.run(["git", "-C", ROOT, *args], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def write_build_info(out: str, *, mksq: str, mksq_src: str, runtime: str,
+                     runtime_src: str, sq_bytes: int) -> str:
+    """dist/BUILD-INFO.txt -- what went into this exact file, and its hash.
+
+    Not a build log. The point is that a stranger can check a release: the sha256 of the
+    file they downloaded, the commit it came from, and the name and version of every binary
+    that touched it. "Built on my machine" is not provenance; this is, and it is free,
+    because the build already knows all of it.
+
+    The `source tree: DIRTY` line is the one that earns the rest. A release built from a
+    working tree with uncommitted edits is unreproducible in a way nobody notices until the
+    bug report that says "the binary doesn't match the repo".
+    """
+    art_sha = sha256_of(out)
+    pretty = ""
+    try:
+        with open("/etc/os-release", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("PRETTY_NAME="):
+                    pretty = line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    pkg = ""
+    own = subprocess.run(["pacman", "-Qo", mksq], capture_output=True, text=True)
+    if own.returncode == 0:
+        pkg = own.stdout.strip()
+    ver = subprocess.run([mksq, "-version"], capture_output=True, text=True)
+    mksq_ver = (ver.stdout.splitlines() or ["?"])[0]
+    uname = os.uname()
+    dirty = bool(_git("status", "--porcelain"))
+    lines = [
+        "GlassPad (Linux) -- build provenance",
+        "",
+        f"appimage       : {os.path.basename(out)}",
+        f"bytes          : {os.path.getsize(out)}",
+        f"sha256         : {art_sha}",
+        f"payload bytes  : {sq_bytes}",
+        f"runtime bytes  : {os.path.getsize(runtime)}",
+        f"runtime sha256 : {sha256_of(runtime)}",
+        f"runtime origin : {runtime_src}",
+        "",
+        f"source commit  : {_git('rev-parse', 'HEAD') or 'unknown'}",
+        f"source describe: {_git('describe', '--tags', '--always') or 'unknown'}",
+        f"tag            : {_git('describe', '--tags', '--exact-match') or '(none)'}",
+        f"source tree    : {'DIRTY -- uncommitted changes were packed' if dirty else 'clean at build time'}",
+        "",
+        f"mksquashfs     : {mksq}  ({mksq_src})",
+        f"mksquashfs ver : {mksq_ver}",
+        f"mksquashfs pkg : {pkg or 'NOT package-owned -- a borrowed binary'}",
+        "squashfs flags : -noappend -root-owned -no-xattrs -no-duplicates "
+        "-comp gzip -b 1048576",
+        "                 (-no-duplicates DISABLES mksquashfs's duplicate detection, so",
+        "                  identical files cost more than once unless they are hardlinked",
+        "                  in the AppDir -- which is how the icon and its payload copy fit)",
+        "",
+        f"built on       : {pretty or uname.sysname} {uname.release} {uname.machine}",
+        f"python         : {sys.version.split()[0]}",
+        f"built at       : {time.strftime('%Y-%m-%dT%H:%M:%S%z')}",
+        "",
+        f"verify with    : sha256sum -c {os.path.basename(out)}.sha256",
+        "                   run from the directory holding the AppImage; the sidecar",
+        "                   names the file, so a tampered or truncated download fails it.",
+    ]
+    info = os.path.join(os.path.dirname(out), "BUILD-INFO.txt")
+    with open(info, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    with open(out + ".sha256", "w", encoding="utf-8") as fh:
+        fh.write(f"{art_sha}  {os.path.basename(out)}\n")
+    return info
 
 def elf_loaded_end(blob: bytes) -> int:
     """Highest offset covered by a PT_LOAD segment -- bytes that belong to the ELF."""
@@ -139,29 +358,14 @@ def main() -> int:
     ver = subprocess.run([mksq, "-version"], capture_output=True, text=True)
     print(f"              {(ver.stdout.splitlines() or ['?'])[0]}")
 
-    # Order matters less than trying them all: one of these has no valid superblock at all,
-    # and a build that died because the first candidate it happened to find was unusable is
-    # a build that blames the tool for the donor's oddity.
-    candidates = [os.path.expanduser(c) for c in
-                  ("~/.local/bin/StabilityMatrix.AppImage",
-                   "~/.local/bin/tether_x86_64.AppImage",
-                   "~/retrodeck/storage/Eden.AppImage")]
-    candidates = [c for c in candidates if os.path.isfile(c)]
-    if not candidates:
-        raise SystemExit("no local .AppImage to borrow a runtime from")
-    runtime = os.path.join(ROOT, "dist", "runtime-borrowed")
-    donor, n, tried = None, None, []
-    for cand in candidates:
-        try:
-            n = extract_runtime(cand, runtime)
-            donor = cand
-            break
-        except SystemExit as exc:
-            tried.append(f"{os.path.basename(cand)}: {exc}")
-    if donor is None:
-        raise SystemExit("no donor had a usable runtime:\n    " + "\n    ".join(tried))
-    print(f"  runtime:    {os.path.basename(donor)} -> {n} bytes "
-          f"({os.path.relpath(runtime, ROOT)})")
+    # The runtime is the half we do not build, so it is pinned and hash-checked instead
+    # of lifted off this machine. acquire_runtime() explains the order;
+    # packaging/runtime-pin.json says what "the right one" means.
+    runtime = os.path.join(ROOT, "dist", "runtime-active")
+    runtime, runtime_src = acquire_runtime(runtime)
+    print(f"  runtime:    {runtime_src}")
+    print(f"              {os.path.getsize(runtime)} bytes -> "
+          f"{os.path.relpath(runtime, ROOT)}")
 
     sys.path.insert(0, ROOT)
     from glasspad import __version__ as version
@@ -232,6 +436,10 @@ def main() -> int:
           f"{pad} bytes of alignment padding)")
     print(f"  image offset where the runtime starts looking: "
           f"{runtime_offset(out)}")
+    info = write_build_info(out, mksq=mksq, mksq_src=mksq_src, runtime=runtime,
+                            runtime_src=runtime_src, sq_bytes=os.path.getsize(sq))
+    print(f"  provenance: {os.path.relpath(info, ROOT)} and "
+          f"{os.path.basename(out)}.sha256")
     return 0
 
 

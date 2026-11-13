@@ -321,19 +321,21 @@ def test_the_module_ships_in_the_appimage():
     if not os.path.isfile(appimage):
         check("no built AppImage on this box; nothing to inspect", True)
         return
-    tool = shutil.which("unsquashfs")
-    if not tool:
-        # Not installed here (squashfs-tools is exactly what the offline packer
-        # had to borrow). Say so rather than pretending the check passed.
-        check("unsquashfs absent on this box; payload listing skipped", True)
-        return
-    out = subprocess.run([tool, "-l", appimage], capture_output=True,
-                         text=True, timeout=180)
-    if out.returncode not in (0, 1):
-        check(f"unsquashfs failed ({out.returncode}: {out.stderr.strip()[:60]})", True)
-        return
-    check("desktop_entry.py is inside the packed payload",
-          "glasspad/desktop_entry.py" in out.stdout)
+    # unsquashfs cannot read a type-2 AppImage -- the squashfs starts behind the runtime
+    # ELF -- and this assertion sat behind `if not tool: skip` for months, turning red the
+    # moment squashfs-tools was installed. See tests/_payload.py.
+    from _payload import paths_in
+    with tempfile.TemporaryDirectory() as tmp:
+        ok, paths, note = paths_in(appimage, tmp)
+        if not ok:
+            check(f"payload not inspectable here ({note}); skipped", True)
+            return
+        # endswith, not `in paths`: the helper returns whole paths relative to the
+        # payload root, so the file is usr/share/glasspad/glasspad/desktop_entry.py. The
+        # old check substring-matched a text listing, which is the difference between a
+        # set membership test and a scan -- and only one of them fails honestly.
+        check("desktop_entry.py is inside the packed payload",
+              any(p.endswith("glasspad/desktop_entry.py") for p in paths))
 
 
 def test_installing_creates_no_caches_in_a_pristine_account():

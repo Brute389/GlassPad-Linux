@@ -357,16 +357,16 @@ def test_the_appimage_ships_the_installer_and_the_rule():
 
     appimage = sorted(__import__("glob").glob(
         os.path.join(ROOT, "dist", "GlassPad-*.AppImage")))
-    tool = shutil.which("unsquashfs")
-    if not (appimage and tool):
-        check("no built AppImage or no unsquashfs here; contents not listed", True)
-        return
-    out = subprocess.run([tool, "-l", appimage[0]], capture_output=True, text=True,
-                         timeout=300)
-    check("install.sh is inside the packed payload",
-          "usr/share/glasspad/install.sh" in out.stdout)
-    check("the udev rule is inside the packed payload",
-          "usr/share/glasspad/packaging/glasspad-udev.rules" in out.stdout)
+    from _payload import paths_in          # why not unsquashfs: see that module's docstring
+    with tempfile.TemporaryDirectory() as tmp:
+        ok, paths, note = paths_in(appimage[-1] if appimage else "", tmp)
+        if not ok:
+            check(f"payload not inspectable here ({note}); contents not listed", True)
+            return
+        check("install.sh is inside the packed payload",
+              "usr/share/glasspad/install.sh" in paths)
+        check("the udev rule is inside the packed payload",
+              "usr/share/glasspad/packaging/glasspad-udev.rules" in paths)
 
 
 def test_uninstall_mode_is_narrow_and_rehearsable():

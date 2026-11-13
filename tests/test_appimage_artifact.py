@@ -91,6 +91,15 @@ def md5(path):
 import hashlib
 
 
+def _md5_sha(path: str) -> str:
+    """The hash the sidecar publishes: sha256, not the md5 used for icon identity."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _md5(path: str) -> str:
     """Byte identity, so "we ship the app's icon" is a checked fact, not a comment."""
     h = hashlib.md5()
@@ -222,6 +231,85 @@ def test_extract_and_run_path():
                        capture_output=True, text=True, timeout=180)
     check(f"extract-and-run works (the documented fallback: {p.stdout.strip()[:40]})",
           p.returncode == 0 and "GlassPad" in p.stdout)
+
+
+def test_the_build_records_what_went_into_the_file():
+    """BUILD-INFO.txt and the .sha256 sidecar, checked against the artefact itself.
+
+    Provenance that nobody verifies is a comment. This checks that the hash in the sidecar
+    IS the file's hash, that the runtime is described rather than assumed, and -- most
+    importantly -- that the `source tree` line is HONEST. It is not asserted to read
+    "clean": a release built from a dirty tree is a real and sometimes necessary thing.
+    What must never happen is a dirty tree described as clean, because that is the build
+    whose bug report cannot be reproduced from the repository.
+    """
+    runs = images()
+    if not runs:
+        print("  skip nothing built yet")
+        return
+    img = runs[-1]
+    side = img + ".sha256"
+    check(f"the .sha256 sidecar exists beside the image", os.path.isfile(side))
+    if os.path.isfile(side):
+        want = open(side, encoding="utf-8").read().split()[0].lower()
+        check("the sidecar hash matches the file it names", _md5_sha(img) == want)
+    info = os.path.join(os.path.dirname(img), "BUILD-INFO.txt")
+    check("BUILD-INFO.txt was written", os.path.isfile(info))
+    if not os.path.isfile(info):
+        return
+    text = open(info, encoding="utf-8").read()
+    for field in ("runtime sha256", "runtime origin", "source commit",
+                  "source tree", "mksquashfs ver", "squashfs flags", "built on"):
+        check(f"BUILD-INFO records {field!r}", field in text)
+    check("and the runtime origin names a source, not just a filename",
+          ("pinned" in text or "BORROWED" in text))
+    check("the tree state is stated as one of two words, never blank",
+          ("source tree    : clean" in text
+           or "DIRTY -- uncommitted changes were packed" in text))
+
+
+def test_a_runtime_that_is_not_the_pin_stops_the_build():
+    """packaging/runtime-pin.json exists to be enforced, not admired.
+
+    The runtime used to be carved out of whichever AppImage was lying around, which meant
+    the deliverable contained an unversioned binary of unknown origin and a rebuild needed
+    this particular laptop. $GLASSPAD_RUNTIME is the escape hatch, so the hatch has to
+    refuse a runtime that contradicts the pin -- otherwise the pin is decoration.
+    """
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import mk_appimage_offline as B                        # noqa: PLC0415
+
+    pin = B.load_pin()
+    check("the pin parses and names a hash, a size and a URL",
+          bool(pin) and len(str(pin.get("sha256", ""))) == 64
+          and int(pin.get("size", 0)) > 0 and str(pin.get("url", "")).startswith("https://"))
+    if not pin:
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = os.path.join(tmp, "runtime-x86_64")
+        with open(bad, "wb") as fh:
+            fh.write(b"\x7fELF" + bytes(int(pin["size"]) - 4))     # right size, wrong bytes
+        check("size alone does not satisfy the pin", not B.matches_pin(bad, pin))
+        check("the pin's own sha256 differs from a file of the same length",
+              B.sha256_of(bad) != pin["sha256"])
+        old = os.environ.get("GLASSPAD_RUNTIME")
+        os.environ["GLASSPAD_RUNTIME"] = bad
+        try:
+            B.acquire_runtime(os.path.join(tmp, "out"))
+            check("an explicit runtime that contradicts the pin is refused", False)
+        except SystemExit as exc:
+            msg = str(exc)
+            check("an explicit runtime that contradicts the pin is refused", True)
+            check("and the refusal says which file, what it got, and what it wanted",
+                  "runtime-pin.json" in msg and "got:" in msg and "pin:" in msg)
+        finally:
+            if old is None:
+                os.environ.pop("GLASSPAD_RUNTIME", None)
+            else:
+                os.environ["GLASSPAD_RUNTIME"] = old
+        if os.path.isfile(B.RUNTIME_CACHE):
+            check("the cached runtime on this machine matches the pin",
+                  B.matches_pin(B.RUNTIME_CACHE, pin))
 
 
 def test_the_licence_documents_resolve_inside_the_image():

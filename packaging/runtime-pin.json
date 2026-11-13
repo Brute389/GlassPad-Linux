@@ -1,0 +1,12 @@
+{
+  "name": "AppImageKit runtime, x86_64",
+  "url": "https://github.com/AppImage/AppImageKit/releases/download/continuous/runtime-x86_64",
+  "release": "continuous",
+  "release_published": "2023-03-08",
+  "sha256": "66f5b22f035022b8bdebb54c066aa6edc7b5db282fe6cdb372e7965f80772557",
+  "size": 193728,
+  "retrieved": "2026-11-12",
+  "cache": "~/.cache/glasspad-build/runtime-x86_64",
+  "why_this_release": "`continuous` is what appimagetool itself uses and the only runtime AppImageKit still publishes binaries for; the newest TAGGED release with an asset is 12 (2019-05-01). continuous is mutable by definition, so the pin is the sha256 plus the publish date -- the build verifies the hash and says which one it used. Nothing in the payload depends on this file beyond appending it.",
+  "why_a_pin_at_all": "Before this, the runtime was carved out of whichever .AppImage happened to be on the build machine, which meant the deliverable contained an unversioned binary of unknown origin, and a rebuild was only possible on that one machine."
+}

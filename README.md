@@ -235,6 +235,29 @@ the udev step is redundant, because KDE Connect (`40-kdeconnect-uinput.rules`) a
 node to whoever is logged in at the console. That is why `--uninstall-uinput` explains a
 still-writable device instead of claiming success in both directions.
 
+### What went into this exact file
+
+`tools/mk_appimage_offline.py` writes two artefacts beside the image, and a release should
+carry both:
+
+```bash
+sha256sum -c GlassPad-1.1.0-x86_64.AppImage.sha256    # from the directory holding it
+less dist/BUILD-INFO.txt
+```
+
+BUILD-INFO records the image's sha256 and size, the runtime's sha256 *and where it came
+from*, the squashfs flags, the source commit and tag, and the `mksquashfs` version plus its
+owning package. One line is the reason the file exists:
+
+```
+source tree    : DIRTY -- uncommitted changes were packed
+```
+
+A release built from a working tree with uncommitted edits is unreproducible in a way nobody
+notices until a bug report says the binary does not match the repository. The build does not
+refuse to do it -- sometimes you need exactly that binary -- it **says so**, and a test
+insists the line is one of two honest answers rather than blank.
+
 ### Where `install.sh` fits now
 
 It is not a second thing to hand over. The AppImage **packs it** —
@@ -292,18 +315,28 @@ dist/GlassPad-1.1.0-x86_64.AppImage --appimage-extract-and-run status
 dist/GlassPad-1.1.0-x86_64.AppImage status      # mounted, via squashfuse
 ```
 
-It needs **no repository and no package**. A type-2 AppImage is `[runtime ELF][squashfs]`,
-and on any disk that has run an AppImage before, both halves already exist:
+A type-2 AppImage is `[runtime ELF][squashfs]`, so two binaries are needed and neither is
+written here. Both are now **named, versioned and hash-checked**:
 
-| piece | where it came from here | |
+| piece | normally | as the last resort |
 | --- | --- | --- |
-| `mksquashfs` | inside the Spotify flatpak bundle (`files/bin/mksquashfs`) | runs on the host against host libraries; 4.7 |
-| runtime ELF | the first 944632 bytes of `StabilityMatrix.AppImage`, up to its squashfs superblock | the donor list is tried in order; one donor had no valid superblock |
-| `appimagetool` | not needed | it glues the same two things; if it *is* installed, the script uses it |
+| `mksquashfs` | `/usr/bin/mksquashfs`, package-owned (`squashfs-tools`, 4.7.5 here); BUILD-INFO records `pacman -Qo` | found anywhere on disk, announced as *borrowed* |
+| runtime ELF | the URL, sha256 and size in `packaging/runtime-pin.json` -- AppImageKit `continuous`, fetched to `~/.cache/glasspad-build/` and hash-verified on every build | carved from a local `.AppImage`, announced as *BORROWED* |
+| `appimagetool` | not needed | it glues the same two halves; if it is installed the script still does the same job directly |
 
-`tools/mk_appimage_offline.py` does the borrowing and **prints what it took from where**,
-because that is a dependency on someone else's bundle rather than a managed one. Two things
-learned doing it, both encoded in tests:
+The runtime was previously the first 944632 bytes of some other application's AppImage on
+the build machine. That is two problems wearing one hat: the deliverable contained an
+unversioned binary of unknown origin, and rebuilding required this particular laptop with
+those particular apps installed. The official runtime turned out to be 193728 bytes, so the
+same payload now ships in **820 KB where it used to take 1.57 MB** -- the download was
+mostly somebody else's runtime.
+
+`$GLASSPAD_RUNTIME` is the override, and it **refuses** a runtime that contradicts the pin:
+an escape hatch that also silences the check would make the pin decoration. Change the pin
+deliberately instead -- hash, release, date.
+
+`tools/mk_appimage_offline.py` prints which rung of each ladder it used, and writes it into
+`dist/BUILD-INFO.txt`. Two things learned doing it, both encoded in tests:
 
 * **no padding between the two halves.** The runtime reports the payload offset as the exact
   end of its own image; 1544 bytes of well-meant alignment produced *"This doesn't look like
@@ -656,7 +689,7 @@ What works instead:
 | `tools/make_appimage.sh` | Stage the AppDir (validated desktop entry, `AppRun`), run it, then pack; cleans its own scratch on success. |
 | `tools/make_appimage.sh` | Stage the AppDir (validated desktop entry, `AppRun`), run it, then pack if the tooling exists — and say plainly what is missing when it does not. |
 | `tools/glasspad-profile` | Claim a profile for the overlay (`--seed`, `--list`, `--status`, `--clear`). Exits 0 unless the *arguments* were wrong — a launcher must never fail because of the overlay. |
-| `tools/mk_appimage_offline.py` | Pack a staged AppDir into a real type-2 `.AppImage` with a borrowed `mksquashfs` and runtime, checking the payload offset and the packed md5. |
+| `tools/mk_appimage_offline.py` | Pack a staged AppDir into a real type-2 `.AppImage`, using the package-owned `mksquashfs` and the pinned AppImageKit runtime (borrowing only as a fallback, and announced when it happens), checking the payload offset and writing BUILD-INFO plus the sha256 sidecar. |
 
 Also here, and deliberately: the tree holds only what is needed to build, install
 and verify. The measurement tools that derived this spec — `render_style.py` and
@@ -1113,8 +1146,10 @@ three things apart that a casual notice tends to blur:
   of it is your business, and nothing is linked statically.
 * **numbers taken from the kernel headers** — the uinput ABI constants in `xd360.py`,
   from `input-event-codes.h` and `uinput.h`.
-* **shipped inside the AppImage** — the type-2 runtime, plus an honest note that the
-  offline build borrows a runtime and a `mksquashfs` from the build machine.
+* **shipped inside the AppImage** — the AppImageKit runtime, pinned by URL, sha256 and
+  size in `packaging/runtime-pin.json`, and hash-verified on every build. Where a machine
+  cannot fetch it, the build falls back to one borrowed from a local AppImage and says so
+  loudly in `dist/BUILD-INFO.txt` rather than quietly shipping a binary nobody can name.
 
 HIDMaestro's licence and its notices for usbip-win2 and DsHidMini used to sit in
 `licenses/windows-original/`. None of it is part of this build — the port creates
