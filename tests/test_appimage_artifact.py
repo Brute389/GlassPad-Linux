@@ -88,6 +88,18 @@ def md5(path):
         return hashlib.md5(fh.read()).hexdigest()
 
 
+import hashlib
+
+
+def _md5(path: str) -> str:
+    """Byte identity, so "we ship the app's icon" is a checked fact, not a comment."""
+    h = hashlib.md5()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def test_offset_is_reported_and_points_at_our_payload():
     runs = images()
     if not runs:
@@ -129,6 +141,33 @@ def test_extracted_contents_match_the_source_tree():
             check(f"contains {rel}", os.path.exists(os.path.join(root, rel)))
         check("AppRun is executable in the image",
               os.access(os.path.join(root, "AppRun"), os.X_OK))
+
+        # The icon: the application's own artwork, byte for byte, in both places a
+        # launcher looks. This used to be a picture of a tablet drawn for the build,
+        # because the tree had no icon where a build looks -- and a placeholder that
+        # outlives the real thing reads as a deliberate choice. So the identity is
+        # asserted, not assumed.
+        art = os.path.join(ROOT, "glasspad", "img", "glasspad_icon_512.png")
+        art_md5 = _md5(art)
+        for rel in ("usr/share/icons/hicolor/512x512/apps/glasspad.png", "glasspad.png"):
+            where = os.path.join(root, rel)
+            check(f"contains {rel}", os.path.exists(where))
+            if os.path.exists(where):
+                check(f"{rel} is the upstream artwork, byte for byte",
+                      _md5(where) == art_md5)
+        check("the drawn placeholder svg is no longer shipped",
+              not os.path.exists(os.path.join(
+                  root, "usr/share/icons/hicolor/scalable/apps/glasspad.svg")))
+        entry = open(os.path.join(root, "GlassPad.desktop"), encoding="utf-8").read()
+        icon_name = [ln.split("=", 1)[1].strip() for ln in entry.splitlines()
+                     if ln.startswith("Icon=")]
+        check(f"Icon={icon_name[:1]} resolves to a file inside the image",
+              bool(icon_name) and any(
+                  os.path.exists(os.path.join(root, d, "icons/hicolor", k, "apps",
+                                              icon_name[0] + ext))
+                  for d in ("usr/share", ".")
+                  for k in ("512x512", "256x256", "scalable")
+                  for ext in (".png", ".svg")))
 
         stale = [d for d, _sub, f in os.walk(root) if d.endswith("__pycache__")]
         check(f"no __pycache__ shipped ({stale[:1]})", not stale)

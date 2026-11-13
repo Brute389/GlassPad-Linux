@@ -134,24 +134,31 @@ def here_dir() -> str:  # tiny helper so _site_dirs stays honest about its input
 
 
 def icon_source() -> str | None:
-    """An icon file to copy into the theme, svg preferred, or None."""
+    """The icon to copy into the theme: the application's own artwork.
+
+    There was a time when this preferred `packaging/glasspad.svg`, a picture of a tablet
+    with a gamepad on it that I drew because the tree had no icon in the place a build
+    looks. It does have one -- `glasspad/img/glasspad_icon_*.png`, the upstream artwork,
+    which is what `Icon=glasspad` in desktop/glasspad.desktop.in has always meant to
+    resolve to. A placeholder that stays after the real thing arrives is worse than no
+    placeholder, because it looks like a deliberate choice.
+
+    Resolution order puts the source tree first (a checkout is what gets built from),
+    then the paths that exist inside a bundle, where the repo layout is gone and the
+    staged copy under usr/share/icons is the only icon file outside the package.
+    """
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for cand in (os.path.join(here, "packaging", "glasspad.svg"),
-                 os.path.join(here, "glasspad", "img", "glasspad_icon_512.png"),
-                 os.path.join(here, "glasspad", "img", "glasspad_icon.png")):
-        if os.path.isfile(cand):
-            return cand
-    # Inside a bundle the repo layout is gone: the AppDir stages the svg two roots
-    # up under usr/share/icons, and the PNGs stay inside the package. Without the
-    # icon path here a bundle silently falls back to the raster icon -- the entry
-    # still works, it just looks soft on a HiDPI panel, which is exactly the kind
-    # of thing nobody notices and everybody sees.
     pkg = os.path.dirname(os.path.abspath(__file__))
-    appshare = os.path.dirname(os.path.dirname(pkg))          # .../usr/share
-    for cand in (os.path.join(appshare, "icons", "hicolor", "scalable", "apps", "glasspad.svg"),
-                 os.path.join(pkg, "..", "packaging", "glasspad.svg"),
+    appshare = os.path.dirname(os.path.dirname(pkg))          # .../usr/share in a bundle
+    for cand in (os.path.join(here, "glasspad", "img", "glasspad_icon_512.png"),
+                 os.path.join(here, "glasspad", "img", "glasspad_icon.png"),
+                 os.path.join(here, "packaging", "glasspad.png"),
                  os.path.join(pkg, "img", "glasspad_icon_512.png"),
-                 os.path.join(pkg, "img", "glasspad_icon.png")):
+                 os.path.join(pkg, "img", "glasspad_icon.png"),
+                 os.path.join(appshare, "icons", "hicolor", "512x512", "apps",
+                              "glasspad.png"),
+                 os.path.join(appshare, "icons", "hicolor", "256x256", "apps",
+                              "glasspad.png")):
         if os.path.isfile(cand):
             return cand
     return None

@@ -222,6 +222,31 @@ def test_uninstall_removes_only_what_it_can_prove_is_its_own():
         shutil.rmtree(d)
 
 
+def test_the_icon_is_the_apps_own_artwork_not_the_builds():
+    """`Icon=glasspad` means the application's icon.
+
+    desktop/glasspad.desktop.in says Icon=glasspad, and the artwork that name denotes is
+    glasspad/img/glasspad_icon_512.png -- upstream, RGBA, the thing the Windows client
+    ships. The build used to substitute a tablet-with-gamepad svg drawn for the build,
+    which is fine as a stand-in and wrong as a permanent resident: an app whose menu icon
+    is not its own icon is a small, permanent inconsistency.
+    """
+    src = de.icon_source()
+    check(f"icon_source resolves to something ({src})", bool(src) and os.path.isfile(src))
+    check(f"and it is the upstream PNG, not a drawn stand-in ({os.path.basename(src or '')})",
+          os.path.basename(src or "") == "glasspad_icon_512.png")
+    check("the placeholder svg is gone from the tree, so it cannot be preferred again",
+          not os.path.exists(os.path.join(ROOT, "packaging", "glasspad.svg")))
+    check("it is a real image (PNG signature, 512x512)",
+          open(src, "rb").read(8) == b"\x89PNG\r\n\x1a\n"
+          and open(src, "rb").read(24)[16:24] == (512).to_bytes(4, "big") * 2)
+    # The entry must still name the app id, not a path: a path into the payload is a
+    # mount point that vanishes when the app exits, leaving a broken picture in the menu.
+    body = de.desktop_text("/tmp/GlassPad.AppImage")
+    check("and Icon= stays a theme name", "Icon=glasspad\n" in body
+          and "Icon=/" not in body)
+
+
 def test_ownership_is_content_not_filename():
     """entry_owner's three states, including the upgrade path that has no marker.
 

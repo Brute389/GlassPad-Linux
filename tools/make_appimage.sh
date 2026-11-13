@@ -120,7 +120,36 @@ for priv in install.sh packaging/glasspad-udev.rules; do
     mkdir -p "$appdir/usr/share/glasspad/$(dirname "$priv")"
     cp "$priv" "$appdir/usr/share/glasspad/$priv"
 done
-cp packaging/glasspad.svg "$appdir/usr/share/icons/hicolor/scalable/apps/glasspad.svg"
+# The icon is the application's own artwork, not a stand-in drawn for the build. The
+# tree ships glasspad/img/glasspad_icon_512.png (upstream), and Icon=glasspad in
+# desktop/glasspad.desktop.in has always been a reference to exactly that.
+#
+# It goes to two places: the theme directory Shelly or any launcher will copy out when it
+# integrates the entry, and the AppDir ROOT, where a .desktop's Icon= name is resolved
+# when no theme is in play. Missing icon means the generic picture in the menu, which
+# reads as "this app is not really installed" -- so a missing source fails the build
+# rather than shipping something that looks provisional.
+_icon_src="glasspad/img/glasspad_icon_512.png"
+[ -f "$_icon_src" ] || { echo "  ERROR: $_icon_src is missing; there is no icon to ship" >&2; exit 1; }
+for _d in "$appdir/usr/share/icons/hicolor/512x512/apps" "$appdir"; do
+  mkdir -p "$_d"
+  cp "$_icon_src" "$_d/glasspad.png"
+done
+# Same bytes, three paths: the package already ships img/glasspad_icon_512.png, and the
+# theme and AppDir copies are identical to it. mksquashfs is invoked with
+# -no-duplicates -- which DISABLES its duplicate detection -- so three copies would be
+# three copies on the wire, and a 351 KB icon would add 700 KB to a 1.5 MB download.
+# Hardlinks are one inode, which squashfs stores once and every extractor restores as an
+# ordinary file at each path.
+_icon_in_image="$appdir/usr/share/glasspad/glasspad/img/glasspad_icon_512.png"
+if [ -f "$_icon_in_image" ]; then
+  for _p in "$appdir/usr/share/icons/hicolor/512x512/apps/glasspad.png" "$appdir/glasspad.png"; do
+    rm -f "$_p"
+    ln "$_icon_in_image" "$_p" \
+      || cp "$_icon_src" "$_p"       # same filesystem in practice; never ship nothing
+  done
+fi
+echo "    icon:       $_icon_src -> hicolor/512x512/apps/glasspad.png and the AppDir root"
 
 cat > "$appdir/GlassPad.desktop" <<'DESKTOP'
 [Desktop Entry]
