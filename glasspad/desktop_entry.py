@@ -283,8 +283,31 @@ def install_desktop(dry: bool = False, force: bool = False) -> int:
     return 0
 
 
+def icon_install_paths(base: str) -> list[str]:
+    """Every path install_desktop could have written the icon to, that exist now.
+
+    install picks one size according to which source it found (svg -> scalable, 512 ->
+    512x512, otherwise 256x256), and uninstall cannot know which one that was -- so it
+    does not guess, it clears the three sizes x two extensions. The basename is the app
+    id, so `hicolor/512x512/apps/glasspad.png` is not a file another package would own;
+    anything else in those directories is untouched by construction.
+
+    The reason this exists: --uninstall-desktop used to end with "left alone: ... the
+    icon theme entry", which is an install that adds three files and an uninstall that
+    takes two. Discovered while wiping a machine back to virgin, where the leftover is
+    the whole point.
+    """
+    out = []
+    for kind in ("scalable", "256x256", "512x512"):
+        for ext in (".svg", ".png"):
+            p = os.path.join(base, "icons", "hicolor", kind, "apps", ICON_NAME + ext)
+            if os.path.isfile(p):
+                out.append(p)
+    return out
+
+
 def uninstall_desktop() -> int:
-    """Remove the menu entry under either name. Never removes the app or its config."""
+    """Remove the menu entry, its icon, and the CLI link. Not the app, not the config."""
     base = data_home()
     apps = os.path.join(base, "applications")
     removed = []
@@ -303,6 +326,15 @@ def uninstall_desktop() -> int:
     from glasspad import bundle
     bundle.uninstall_cli_link()
 
+    icons = icon_install_paths(base)
+    for path in icons:
+        try:
+            os.remove(path)
+            removed.append(path)
+        except OSError as exc:
+            print(f"could not remove {path}: {exc.strerror}")
+            return 1
+
     if removed:
         for p in removed:
             print(f"removed {p}")
@@ -310,5 +342,20 @@ def uninstall_desktop() -> int:
         # caches install declined to create.
     else:
         print(f"no menu entry to remove in {apps}")
-    print("left alone: the app itself, the icon theme entry, and ~/.config/GlassPad.")
+
+    # Same rule as install: refresh a cache that exists, never create one. Removing an
+    # icon while a stale cache still lists it is how a menu keeps showing a picture of
+    # an application that has gone.
+    theme = os.path.join(base, "icons", "hicolor")
+    if icons and os.path.exists(os.path.join(theme, "icon-theme.cache")):
+        exe = shutil.which("gtk-update-icon-cache")
+        if exe:
+            try:
+                subprocess.run([exe, "-q", "-f", theme], capture_output=True, timeout=30)
+                print("refreshed the existing icon cache")
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+    print("left alone: the app itself and ~/.config/GlassPad -- your layout is yours")
+    print("to decide about.")
     return 0

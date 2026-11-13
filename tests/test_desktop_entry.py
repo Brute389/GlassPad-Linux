@@ -350,6 +350,63 @@ def test_our_own_wrapper_on_path_is_accepted_for_that_tree():
         shutil.rmtree(other, ignore_errors=True)
 
 
+def _installed_glasspad_files(home):
+    """What the installer put under $HOME -- nothing else.
+
+    Scoped to .local/ on purpose: the sandbox also contains a copied-out package whose
+    own img/glasspad_icon.png is source, not installed state, and a stand-in AppImage.
+    Counting those made this test fail for the wrong reason on its first run.
+    """
+    out = []
+    top = os.path.join(home, ".local")
+    for base, _dirs, files in os.walk(top):
+        for f in files:
+            if "glasspad" in f.lower():
+                out.append(os.path.relpath(os.path.join(base, f), home))
+    return sorted(out)
+
+
+def test_uninstall_takes_the_icon_too_and_leaves_everything_else():
+    """install writes three files; uninstall used to take two.
+
+    It ended with the sentence "left alone: ... the icon theme entry", delivered with
+    complete sincerity by a program that had just put that entry there. Discovered while
+    wiping a machine back to virgin -- where a leftover is the entire thing you were
+    trying to avoid -- and the fix is bounded rather than clever: only files named
+    exactly after the app id, in the three sizes install itself chooses between.
+
+    The other half matters as much: a directory full of other people's icons must come
+    through untouched.
+    """
+    d = sandbox()
+    try:
+        img = os.path.join(d, "GlassPad.AppImage")
+        open(img, "w").close()
+        os.chmod(img, 0o755)
+        apps512 = os.path.join(d, ".local", "share", "icons", "hicolor",
+                               "512x512", "apps")
+        os.makedirs(apps512, exist_ok=True)
+        keep = os.path.join(apps512, "someone-else.png")
+        with open(keep, "w", encoding="utf-8") as fh:
+            fh.write("not yours")
+
+        r = run_in(d, ["--install-desktop"], extra_env={"APPIMAGE": img})
+        check(f"install ran ({r.returncode})", r.returncode == 0)
+        after_install = _installed_glasspad_files(d)
+        check(f"install left an entry and an icon ({len(after_install)})",
+              len(after_install) >= 2)
+
+        r2 = run_in(d, ["--uninstall-desktop"], extra_env={"APPIMAGE": img})
+        left = _installed_glasspad_files(d)
+        check(f"uninstall removed every one of them ({left})", left == [])
+        check("and the unrelated icon in the same directory survived",
+              os.path.exists(keep))
+        check("it says the layout is left alone, not the icon",
+              "icon theme entry" not in r2.stdout)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:
