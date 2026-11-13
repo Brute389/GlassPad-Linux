@@ -29,6 +29,13 @@ import subprocess
 import sys
 
 DESKTOP_NAME = "org.glasspad.GlassPad.desktop"
+# Written into every entry this installer produces, so that ownership is PROVABLE.
+# Filenames are not ours to reason about: Shelly, the AppImage manager on CachyOS, writes
+# its entry for this application as `glasspad.desktop` -- exactly the name LEGACY_NAMES
+# reserves for a very old install of ours. Judging ownership by name therefore called
+# Shelly's file "ours": install wrote a second entry, and --uninstall-desktop would have
+# deleted the manager's entry from under its own metadata database. See entry_owner().
+MARKER_KEY = "X-GlassPad-Installer"
 # The name install.sh writes for a per-user install. Uninstall removes both,
 # because "take the menu entry away" means that whatever is in the menu, not
 # whichever of the two installers happens to have put it there.
@@ -177,6 +184,7 @@ Categories=Game;
 Keywords=gamepad;controller;touch;xbox;overlay;
 StartupNotify=false
 X-KDE-StartupNotify=false
+{MARKER_KEY}=1
 # A second instance would double every input, so never restore duplicates.
 X-GNOME-SingleWindow=true
 Actions=status;
@@ -185,6 +193,45 @@ Actions=status;
 Name=Check GlassPad environment
 Exec="{status}"
 """
+
+
+def entry_exec(path: str) -> str:
+    """The Exec= value of a .desktop file, quotes stripped, or ""."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for ln in fh:
+                if ln.startswith("Exec="):
+                    return ln[5:].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+
+def entry_owner(path: str, target: str) -> str:
+    """"ours" | "foreign" | "other" -- judged on content, never on filename.
+
+    The middle state is the whole reason this exists:
+
+      ours     -- carries MARKER_KEY, or sits at our own filename with an Exec resolving
+                  to this very file (an entry written by a GlassPad from before the marker
+                  existed, so upgrades still recognise and replace those).
+      foreign  -- launches THIS file but was not written by us: Shelly's entry,
+                  AppImageLauncher's, a hand-made one. Do not duplicate it on install, and
+                  never delete it on uninstall: the manager tracks the file's location and
+                  owns the entry, whatever it chose to call it.
+      other    -- some other application; nothing to say about it.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            body = fh.read(8192)
+    except OSError:
+        return "other"
+    if MARKER_KEY in body:
+        return "ours"
+    ex = entry_exec(path)
+    if target and ex and os.path.realpath(ex) == os.path.realpath(target):
+        return "ours" if os.path.basename(path) == DESKTOP_NAME else "foreign"
+    return "other"
 
 
 def applications_dirs() -> list[str]:
@@ -197,49 +244,46 @@ def applications_dirs() -> list[str]:
 
 
 def foreign_entries_for(target: str) -> list[tuple[str, str]]:
-    """Entries that already launch THIS file but were not written by us.
+    """Entries that launch THIS file but were not written by us: (path, Name=).
 
-    An AppImage manager (Shelly, AppImageLauncher, Discover's AppImage backend) writes
-    its own .desktop when it installs an AppImage, and it owns the file's location from
-    then on -- it is the thing that moves, updates and removes the file. A second entry
-    written by us means two menu items for one application, only one of which the
-    manager keeps current, and the moment it relocates the file ours launches nothing.
-    That is not a cosmetic duplicate: a menu item that fails reads as a broken app.
+    An AppImage manager (Shelly, AppImageLauncher, Discover's AppImage backend) integrates
+    an AppImage by copying it into its own directory and writing a .desktop that it then
+    owns -- it is the thing that moves, updates and removes the file afterwards. A second
+    entry written by us means two menu items for one application, only one of which the
+    manager keeps current; the moment it relocates the file, ours launches nothing, and a
+    menu item that fails reads as a broken app.
 
-    Matching is on the resolved Exec path, not the app name, so another GlassPad build
-    does not count as "this file", and our own filename is skipped outright.
+    Matching is on the resolved Exec path via entry_owner(), never on filename -- which is
+    how Shelly's `glasspad.desktop` gets recognised for what it is.
     """
-    if not target or " " in target and not os.path.exists(target):
+    if not target or (" " in target and not os.path.exists(target)):
         return []            # e.g. "python3 -m glasspad": nothing for a manager to own
-    want = os.path.realpath(target)
-    mine = (DESKTOP_NAME,) + LEGACY_NAMES
     out: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for d in applications_dirs():
         try:
             names = sorted(os.listdir(d))
         except OSError:
             continue
         for n in names:
-            if not n.endswith(".desktop") or n in mine:
+            if not n.endswith(".desktop"):
                 continue
             path = os.path.join(d, n)
+            if os.path.realpath(path) in seen:
+                continue
+            if entry_owner(path, target) != "foreign":
+                continue
+            seen.add(os.path.realpath(path))
+            label = n[: -len(".desktop")]
             try:
                 with open(path, encoding="utf-8", errors="replace") as fh:
-                    body = fh.read(8192)
-            except OSError:
-                continue
-            for ln in body.splitlines():
-                if not ln.startswith("Exec="):
-                    continue
-                val = ln[5:].strip().strip('"')
-                if val and os.path.realpath(val) == want:
-                    label = n
-                    for ln2 in body.splitlines():
-                        if ln2.startswith("Name=") and len(ln2) > 5:
-                            label = ln2[5:].strip()
+                    for ln in fh:
+                        if ln.startswith("Name=") and len(ln) > 5:
+                            label = ln[5:].strip()
                             break
-                    out.append((path, label))
-                    break
+            except OSError:
+                pass
+            out.append((path, label))
     return out
 
 
@@ -315,22 +359,28 @@ def install_desktop(dry: bool = False, force: bool = False) -> int:
         icon_dest = os.path.join(base, "icons", "hicolor", kind, "apps", ICON_NAME + ext)
 
     dest = os.path.join(apps, DESKTOP_NAME)
+    foreign = foreign_entries_for(target)
     if dry:
-        print(f"would write {dest}")
-        if icon_dest:
-            print(f"would copy {icon} -> {icon_dest}")
+        # Rehearse the DECISION, not only the file writes. This used to print "would
+        # write <path>" and then, two lines later, "a real run would not add another" --
+        # which reads as a contradiction and tells the user nothing about what happens.
+        if foreign and not force:
+            print(f"would NOT write {dest}")
+            for path, label in foreign:
+                print(f"           {label} already launches this file:")
+                print(f"             {path}")
+            print("           (pass --force to write ours as well)")
+        else:
+            print(f"would write {dest}")
+            if icon_dest:
+                print(f"would copy {icon} -> {icon_dest}")
         print(f"launch target: {target}  ({why})")
-        foreign = foreign_entries_for(target)
-        if foreign:
-            print(f"note: {len(foreign)} existing entry/entries already launch this file"
-                  f" ({foreign[0][0]}) -- a real run would not add another")
         # The rehearsal has to rehearse all of it: a --dry-run that quietly
         # omits the command line is how you discover the difference on the real
         # run, which is the one that has a password prompt in it.
         from glasspad import bundle
         print()
         bundle.install_cli_link(dry=True, force=force)
-
         return 0
 
     foreign = foreign_entries_for(target)
@@ -388,15 +438,32 @@ def uninstall_desktop() -> int:
     base = data_home()
     apps = os.path.join(base, "applications")
     removed = []
+    # The target this installer would have written, for the ownership test. Uninstall can
+    # run from any copy of the app, so "is this file's Exec pointing at where I would have
+    # written one" is not the question; MARKER_KEY is, with a filename-plus-Exec fallback
+    # for entries written before the marker existed and no running bundle to compare to.
+    target, _why = launch_target()
     for name in (DESKTOP_NAME,) + LEGACY_NAMES:
         path = os.path.join(apps, name)
-        if os.path.isfile(path):
-            try:
-                os.remove(path)
-                removed.append(path)
-            except OSError as exc:
-                print(f"could not remove {path}: {exc.strerror}")
-                return 1
+        if not os.path.isfile(path):
+            continue
+        owner = entry_owner(path, target or "")
+        if owner != "ours":
+            # Something else holds this filename. On this machine right now, Shelly's entry
+            # for the very same application is `glasspad.desktop` -- deleting it by name
+            # would take the manager's menu item away while its database still believed it
+            # existed. Leave it, and say so, because "I removed your menu entry" and then
+            # a missing icon is worse than a leftover.
+            print(f"left alone: {path} was not written by this installer")
+            print(f"           (no {MARKER_KEY} key; it launches "
+                  f"{entry_exec(path) or 'nothing recognisable'})")
+            continue
+        try:
+            os.remove(path)
+            removed.append(path)
+        except OSError as exc:
+            print(f"could not remove {path}: {exc.strerror}")
+            return 1
     # The CLI link is part of what install_desktop created, so it is part of what
     # uninstall takes back. uninstall_cli_link() only removes a link that points at
     # this install, so a `glasspad` belonging to a package or another build survives.

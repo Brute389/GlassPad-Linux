@@ -21,6 +21,7 @@ here writes outside dist/.
 """
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import struct
@@ -197,12 +198,35 @@ def main() -> int:
     # to "align" the squashfs and the runtime answered "This doesn't look like a squashfs
     # image", because it was reading the zeros. Alignment is a mksquashfs concern inside the
     # image, not a concern between the two halves of the AppImage.
-    with open(out, "wb") as o:
-        with open(runtime, "rb") as f:
-            shutil.copyfileobj(f, o)
-        pad = 0
-        with open(sq, "rb") as f:
-            shutil.copyfileobj(f, o)
+    try:
+        with open(out, "wb") as o:
+            with open(runtime, "rb") as f:
+                shutil.copyfileobj(f, o)
+            pad = 0
+            with open(sq, "rb") as f:
+                shutil.copyfileobj(f, o)
+    except OSError as exc:
+        if exc.errno in (errno.ETXTBSY, errno.EBUSY):
+            # Hit twice on this machine. "Text file busy" names neither the holder nor the
+            # cure, and the obvious reading -- a running overlay -- is usually NOT it: an
+            # `--appimage-mount` killed by a timeout leaves the FUSE mount and its runtime
+            # process holding the previous file open indefinitely, and every rebuild after
+            # that fails here, far from the cause.
+            #
+            # BOTH errnos, because both read identically and I checked the wrong one first:
+            # a mounted or executing file gives ETXTBSY (26), which is what actually
+            # happens, while EBUSY (16) is what "Device or resource busy" gives when the
+            # unmount is refused. Matching only EBUSY meant the handler never ran and the
+            # user got a bare traceback exactly as before.
+            sys.stderr.write(
+                f"  cannot write {out}: Text file busy.\n"
+                "  Something still has the PREVIOUS AppImage open. Most often that is a\n"
+                "  FUSE mount left behind by a killed `--appimage-mount`, not a running\n"
+                "  overlay. Find it and clear it, then re-run:\n"
+                f"      fuser -v {out}\n"
+                "      for m in $(mount | grep -oE '/tmp/.mount_[^ ]+'); do "
+                "fusermount -u \"$m\"; done\n")
+        raise
     os.chmod(out, 0o755)
     print(f"  wrote       {os.path.relpath(out, ROOT)} ({os.path.getsize(out)} bytes, "
           f"{pad} bytes of alignment padding)")

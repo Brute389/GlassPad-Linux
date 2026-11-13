@@ -175,29 +175,96 @@ def test_path_key_only_for_a_tree_that_still_exists():
 
 
 # --- removing it -------------------------------------------------------------
-def test_uninstall_removes_both_names_and_leaves_the_rest():
+def test_uninstall_removes_only_what_it_can_prove_is_its_own():
+    """Ownership by marker, not by filename.
+
+    Shelly -- the AppImage manager on CachyOS -- integrates this very application under
+    the filename `glasspad.desktop`, which is the name an old install.sh used and which
+    LEGACY_NAMES still lists so upgrades find it. An uninstaller that matched names
+    deleted the manager's menu entry while its metadata database went on believing in it,
+    leaving a menu item owned by nobody. Uninstall therefore removes files carrying
+    MARKER_KEY (or, for entries predating the key, files at our own name whose Exec points
+    at this install) and reports everything else as left alone.
+    """
     d = sandbox()
     try:
         apps = os.path.join(d, ".local", "share", "applications")
         os.makedirs(apps, exist_ok=True)
+        img = os.path.join(d, "GlassPad-1.1.0-x86_64.AppImage")
+        open(img, "w").close()
+        os.chmod(img, 0o755)
         modern = os.path.join(apps, de.DESKTOP_NAME)
-        legacy = os.path.join(apps, "glasspad.desktop")
+        theirs = os.path.join(apps, "glasspad.desktop")
         cfg = os.path.join(d, ".config", "GlassPad")
-        for p in (modern, legacy):
-            open(p, "w").write("[Desktop Entry]\n")
+        with open(modern, "w", encoding="utf-8") as fh:
+            fh.write(f'[Desktop Entry]\nName=GlassPad\nExec="{img}"\n'
+                     f'{de.MARKER_KEY}=1\n')
+        with open(theirs, "w", encoding="utf-8") as fh:
+            fh.write('[Desktop Entry]\nName=GlassPad\n'
+                     f'Exec="{img}"\nX-KDE-StartupNotify=false\n')
         os.makedirs(cfg, exist_ok=True)
         open(os.path.join(cfg, "layout.json"), "w").write("{}")
 
-        r = run_in(d, ["--uninstall-desktop"])
+        r = run_in(d, ["--uninstall-desktop"], {"APPIMAGE": img})
         check(f"uninstall succeeded ({r.returncode})", r.returncode == 0)
-        check("the modern entry is gone", not os.path.exists(modern))
-        check("the install.sh-era entry is gone too", not os.path.exists(legacy))
+        check("our marked entry is gone", not os.path.exists(modern))
+        check("the manager's same-named file SURVIVES", os.path.exists(theirs))
+        check("and it says why instead of reporting a clean sweep",
+              "left alone" in r.stdout and de.MARKER_KEY in r.stdout)
         check("the saved layout survived -- this is not an app uninstall",
               os.path.exists(os.path.join(cfg, "layout.json")))
 
-        again = run_in(d, ["--uninstall-desktop"])
+        again = run_in(d, ["--uninstall-desktop"], {"APPIMAGE": img})
         check(f"and it is safe to run twice ({again.returncode})",
-              again.returncode == 0 and "no menu entry" in again.stdout)
+              again.returncode == 0 and "no menu entry" in again.stdout
+              and os.path.exists(theirs))
+    finally:
+        shutil.rmtree(d)
+
+
+def test_ownership_is_content_not_filename():
+    """entry_owner's three states, including the upgrade path that has no marker.
+
+    A pre-marker entry at OUR name with an Exec pointing at this install is ours: an
+    install over an older one must still replace it. The same bytes under Shelly's name is
+    foreign, because the name is the only thing that differs and it is not ours.
+    """
+    d = sandbox()
+    try:
+        apps = os.path.join(d, ".local", "share", "applications")
+        os.makedirs(apps, exist_ok=True)
+        img = os.path.join(d, "GlassPad.AppImage")
+        open(img, "w").close()
+        body = f'[Desktop Entry]\nName=GlassPad\nExec="{img}"\n'
+        at_our_name = os.path.join(apps, de.DESKTOP_NAME)
+        under_theirs = os.path.join(apps, "glasspad.desktop")
+        unrelated = os.path.join(apps, "firefox.desktop")
+        for p in (at_our_name, under_theirs):
+            open(p, "w").write(body)
+        open(unrelated, "w").write('[Desktop Entry]\nName=Firefox\n'
+                                   'Exec=firefox\n')
+        check("no marker, our name, our Exec  -> ours (upgrade)",
+              de.entry_owner(at_our_name, img) == "ours")
+        check("no marker, another name, our Exec -> foreign",
+              de.entry_owner(under_theirs, img) == "foreign")
+        check("another application entirely      -> other",
+              de.entry_owner(unrelated, img) == "other")
+        # foreign_entries_for walks the XDG applications dirs, so this in-process call
+        # needs the sandbox pointed at -- run_in only sets it for subprocesses, and a
+        # scan of the real $HOME here would find nothing and prove nothing.
+        saved = {k: os.environ.get(k) for k in ("HOME", "XDG_DATA_HOME")}
+        try:
+            os.environ["HOME"] = d
+            os.environ["XDG_DATA_HOME"] = os.path.join(d, ".local", "share")
+            found = [p for p, _n in de.foreign_entries_for(img)]
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        check(f"and a manager entry is what install_desktop would find ({found})",
+              found == [under_theirs])
     finally:
         shutil.rmtree(d)
 

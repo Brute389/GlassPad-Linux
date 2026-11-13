@@ -225,13 +225,19 @@ def test_our_dangling_link_is_repaired_not_refused():
                   bundle.cli_link_state()[0] == "dangling")
             with contextlib.redirect_stdout(buf):
                 rc = bundle.install_cli_link()
-        out = buf.getvalue()
-        check(f"repaired (rc={rc})", rc == 0)
-        check("says it was broken and what it pointed at",
-              "broken" in out and "moved" in out)
-        check(f"now points at the running file ({os.readlink(dest)})",
-              os.path.realpath(dest) == os.path.realpath(img))
-        check("and the state agrees", bundle.cli_link_state()[0] == "ok")
+            # These two stay INSIDE the env block. They once sat outside it and passed --
+            # not because the sandbox worked, but because this machine had a real
+            # ~/.local/bin/glasspad installed, which is exactly the file the assertions
+            # were reading. Wiping the machine turned them red and proved the point: an
+            # assertion that survives on unrelated host state is testing somebody else's
+            # install.
+            out = buf.getvalue()
+            check(f"repaired (rc={rc})", rc == 0)
+            check("says it was broken and what it pointed at",
+                  "broken" in out and "moved" in out)
+            check(f"now points at the running file ({os.readlink(dest)})",
+                  os.path.realpath(dest) == os.path.realpath(img))
+            check("and the state agrees", bundle.cli_link_state()[0] == "ok")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -250,9 +256,9 @@ def test_someone_elses_dangling_link_is_still_left_alone():
                  PATH=bindir + ":/usr/bin:/bin", APPIMAGE=img):
             with contextlib.redirect_stdout(buf):
                 rc = bundle.install_cli_link()
-        check(f"refused (rc={rc})", rc != 0)
-        check("and the link is untouched", os.path.islink(dest)
-              and os.readlink(dest) == "/nowhere/firefox")
+            check(f"refused (rc={rc})", rc != 0)
+            check("and the link is untouched", os.path.islink(dest)
+                  and os.readlink(dest) == "/nowhere/firefox")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

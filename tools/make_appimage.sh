@@ -144,6 +144,30 @@ X-KDE-StartupNotify=false
 X-GNOME-SingleWindow=true
 DESKTOP
 
+# The version, in the key AppImage managers read. Installed through Shelly, our entry
+# landed in its list as Version "Unknown" -- nothing breaks, but a manager cannot tell you
+# whether your copy is current, which is the whole point of letting it manage the file.
+# Appended rather than interpolated: the heredoc above is quoted on purpose (an unquoted
+# one once ran `python3 -m glasspad` while generating AppRun), and a version is the one
+# thing in this file that changes per build.
+_glasspad_version=$(python3 -c '
+import re
+src = open("glasspad/__init__.py", encoding="utf-8").read()
+# \x27 rather than a quote: this whole program is one single-quoted
+# shell argument, and the previous attempt to escape its regex ended the
+# string early -- the build died with a bare "SyntaxError: invalid syntax"
+# from python, three layers away from the quoting mistake.
+m = re.search(r"^__version__\s*=\s*[\x27\"]([^\x27\"]+)", src, re.M)
+print(m.group(1) if m else "")
+')
+if [ -n "$_glasspad_version" ]; then
+  printf 'X-AppImage-Version=%s\n' "$_glasspad_version" >> "$appdir/GlassPad.desktop"
+  echo "    embedded X-AppImage-Version=$_glasspad_version"
+else
+  echo "    could not read __version__ from glasspad/__init__.py" >&2
+  exit 1
+fi
+
 if command -v desktop-file-validate >/dev/null 2>&1; then
   echo "==> validating the desktop entry"
   desktop-file-validate "$appdir/GlassPad.desktop" \

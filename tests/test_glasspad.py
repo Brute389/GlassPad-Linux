@@ -903,8 +903,12 @@ class TestDocPointers:
     # exempted.
     LOOKUP = (ROOT / "glasspad", ROOT / "desktop", ROOT / "licenses",
               ROOT / "tests", ROOT)
-    # Written at runtime in the user's config dir, never shipped.
-    RUNTIME = {"layout.json"}
+    # Written at runtime in the user's own directories, never shipped and never expected
+    # in this tree: layout.json in ~/.config/GlassPad, and the menu entries that live in
+    # ~/.local/share/applications -- ours AND a manager's. Shelly writes our application's
+    # entry as `glasspad.desktop`, so that bare name is now load-bearing prose in
+    # desktop_entry.py; it names a file on the user's disk, not one a reader can open here.
+    RUNTIME = {"layout.json", "glasspad.desktop", "org.glasspad.GlassPad.desktop"}
     # Removed on purpose, and still cited by name in the code that replaced them:
     # "parity with window.py's _toggle_edit" is telling you WHICH behaviour was copied,
     # which is the useful half of the sentence. Rewriting 18 such comments to say
