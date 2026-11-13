@@ -25,6 +25,7 @@ Split out of `README.md`, verbatim — nothing here was rewritten for the move.
 * [Device details worth knowing](#device-details-worth-knowing)
 * [Why the licence reader is inside the app](#why-the-licence-reader-is-inside-the-app)
 * [Why GlassPad does not install packages for you](#why-glasspad-does-not-install-packages-for-you)
+* [The grant does not end when the terminal closes](#the-grant-does-not-end-when-the-terminal-closes)
 
 ---
 
@@ -838,3 +839,47 @@ hiding the typelib, because no machine in the development path had the real cond
   with an instrument that answers the question you asked, and know what your instrument returns
   when the answer is "nothing".
 
+---
+
+## The grant does not end when the terminal closes
+
+About → **Grant gamepad access** opens a terminal, and then GlassPad knew nothing more. The
+terminal closes, the overlay keeps its null pad, and the user is left choosing between
+restarting the app, logging out, or giving up -- in that order, because restarting is the
+obvious thing and, in one of the three cases, the one thing that cannot possibly work.
+
+The three cases are distinguishable from inside the running process, which is what turns this
+from an apology into a state machine (`pad.grant_state`):
+
+| Question asked | Answer | Verdict shown |
+| --- | --- | --- |
+| can we open `/dev/uinput` now? | yes | **restart GlassPad** -- no log out needed |
+| ...no, but does the *account* have `input` now? | yes | **log out and back in** -- restarting will not help |
+| neither | | **not granted yet** -- the terminal has the reason |
+
+Two details carry the weight:
+
+* **A process keeps the groups it started with.** `os.getgroups()` answers about the process
+  and will keep saying "no `input`" until the session is replaced, so membership has to be
+  asked of the account out of process (`id -nG`). That is the only way to tell the
+  log-out case apart from the nothing-happened case, and it is why the wording says so
+  explicitly rather than leaving "restart and see" as the advice.
+* **`os.access` is a question about permissions; `os.open` is the question the pad asks.**
+  ACL-driven `uaccess` rules and mandatory access control are exactly where the two disagree,
+  and a verdict built on `access` could announce "granted" while the pad still could not be
+  created. The probe opens for writing and closes immediately -- the device itself is not
+  created until `UINPUT_DEV_SETUP`/`UI_DEV_CREATE` are ioctl'd, and the suite checks the
+  probe never does that: a probe that created a device would hand Steam a new phantom
+  controller every two seconds, for as long as the panel is open.
+
+No self-relaunch button, deliberately: an app that execs itself escapes the environment a
+manager set up (Steam and GameScope hand over variables the overlay depends on), and there is
+a window in which the old pad and the new one both exist, which is the double-input failure the
+desktop entry goes out of its way to prevent. One click on the thing they launched already is
+cheaper than explaining that.
+
+Tests: `tests/test_grant_state.py` (11) covers the decision, the wording constraints (no shell
+commands in text read on a tablet; the pending verdict promises nothing) and the polling bound
+-- five minutes, not the rest of a session. The part no headless suite can see is asserted
+live, in the selftest (`step_grant_verdict`): that the label on the real panel actually
+changes for all three states, that the toast repeats it, and that the timer stops at a verdict.

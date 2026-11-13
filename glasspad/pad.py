@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import errno
 import os
+import subprocess
 import sys
 import threading
 from typing import Callable, Iterable
@@ -184,6 +185,132 @@ HAT_VECTORS: dict[str, tuple[int, int]] = {
 
 def uinput_available(path: str = "/dev/uinput") -> bool:
     return os.access(path, os.W_OK)
+
+
+#: ---------------------------------------------------------------------------
+#: What happens AFTER the grant, which is where this program used to stop.
+#:
+#: A user on a machine that has never had GlassPad presses "Grant gamepad access" in
+#: the About box, a terminal opens, they approve a password, the terminal closes, and
+#: the overlay is still sitting there with a null pad and no idea what just happened.
+#: The installer knows the answer -- it tracks whether THIS run added the group -- but
+#: that knowledge dies in the terminal window, and the user is left to decide whether
+#: to restart the app, log out, or give up. Wrong guesses here are expensive in a
+#: specific way: restarting does nothing when the problem is group membership, so the
+#: most obvious thing to try is the one that cannot work.
+#:
+#: The two residues are distinguishable from inside the running process, which is what
+#: makes this a state machine instead of a guess:
+#:
+#:   * opening the node succeeds now  -> the grant changed the node (ACL or mode), so a
+#:     fresh process will work; this program just cannot retroactively hand itself a
+#:     device it failed to create at start.
+#:   * opening fails but the ACCOUNT now has `input` -> membership is real and the
+#:     process credentials are stale. No restart, no `udevadm trigger`, no re-reading
+#:     the rule fixes that: a process keeps the groups it started with. Only a new
+#:     login does.
+#:   * neither -> nothing was granted, or the password prompt was refused.
+#: ---------------------------------------------------------------------------
+
+GRANT_RESTART = "restart"
+GRANT_RELOGIN = "relogin"
+GRANT_PENDING = "pending"
+
+#: Wording constraints, because these sentences decide what somebody with a controller
+#: in each hand does next:
+#:   GRANT_RESTART must name a restart as sufficient, and must not mention logging out.
+#:   GRANT_RELOGIN must name logging out and must say that restarting will NOT help --
+#:     the one thing a user would try first is the one that cannot work.
+GRANT_MESSAGES = {
+    GRANT_RESTART: ("granted -- close GlassPad and start it again, and the pad will be "
+                    "live. No log out needed."),
+    GRANT_RELOGIN: ("granted -- but this takes effect at your NEXT LOG IN. Restarting "
+                    "GlassPad now will not help: a running program keeps the groups it "
+                    "started with."),
+    GRANT_PENDING: ("not granted yet -- the terminal window shows what it did. Approve "
+                    "the password prompt and leave this window open: it updates by "
+                    "itself."),
+}
+
+
+def writable_now(path: str = "/dev/uinput") -> bool:
+    """Can WE open the node for writing, this second? A real open, not the mode bits.
+
+    `os.access` is a question about permissions; `os.open` is the question the pad
+    actually asks. Mandatory access control and ACL-driven `uaccess` rules are exactly
+    where the two disagree, and a verdict built on `access` would tell a user "granted"
+    while the pad still could not be created -- which is the same lie as silence, only
+    louder.
+
+    Opening is safe: the device is not created until UINPUT_DEV_SETUP and UI_DEV_CREATE
+    are ioctl'd, so there is nothing here to leak or leave behind. The fd is closed
+    immediately regardless.
+    """
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CLOEXEC)
+    except OSError:
+        return False
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    return False if fd < 0 else True
+
+
+def user_group_names(user: str | None = None, runner=None) -> frozenset[str]:
+    """Groups the ACCOUNT has -- not the ones this process was started with.
+
+    That distinction is the whole of GRANT_RELOGIN. `os.getgroups()` answers about the
+    process and will keep answering "no input" until the session is replaced, so the
+    account has to be asked separately, out of process.
+    """
+    who = user or os.environ.get("USER") or ""
+    if not who:
+        try:
+            import pwd
+            who = pwd.getpwuid(os.getuid()).pw_name
+        except Exception:  # noqa: BLE001 - no name, no answer, and that is fine
+            return frozenset()
+    run = runner or subprocess.run
+    try:
+        out = run(["id", "-nG", who], capture_output=True, text=True, timeout=10)
+    except Exception:  # noqa: BLE001 - `id` missing or slow: no opinion, never a guess
+        return frozenset()
+    if getattr(out, "returncode", 1) != 0:
+        return frozenset()
+    return frozenset((getattr(out, "stdout", "") or "").split())
+
+
+def grant_state(user: str | None = None, *, writable=None, groups=None,
+                path: str = "/dev/uinput") -> tuple[str, str]:
+    """(state, message) -- the verdict the About box shows after a grant is attempted.
+
+    Every input is injectable for the same reason as glasspad/deps.py: a test that asks
+    this machine whether it has `input` is measuring this machine, and it will pass in
+    whatever state the developer's box happens to be in. The three states are all
+    reachable here on demand, which is the only way to assert that the RELOGIN wording
+    is the one that gets shown.
+    """
+    can = writable_now(path) if writable is None else bool(writable)
+    if can:
+        return GRANT_RESTART, GRANT_MESSAGES[GRANT_RESTART]
+    have = (user_group_names(user) if groups is None
+            else frozenset(groups()))
+    if "input" in have:
+        return GRANT_RELOGIN, GRANT_MESSAGES[GRANT_RELOGIN]
+    return GRANT_PENDING, GRANT_MESSAGES[GRANT_PENDING]
+
+
+def keep_polling(state: str, polls: int, max_polls: int = 150) -> bool:
+    """Poll on? Stops at a verdict, and stops eventually if there never is one.
+
+    150 at the two-second interval the overlay uses is five minutes: long enough for a
+    password prompt, a polkit round trip and a settled udev, short enough that somebody
+    who dismissed the prompt does not leave a timer running for the rest of the session.
+    """
+    if state != GRANT_PENDING:
+        return False
+    return polls < max_polls
 
 
 #: The state this program must never reach quietly: controls that draw, animate

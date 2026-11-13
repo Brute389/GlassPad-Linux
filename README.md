@@ -223,7 +223,7 @@ Three commands, in order of how much they cost:
 
 ```bash
 python3 -m glasspad --status      # this machine: library, compositor, grants, profiles
-python3 -m glasspad --selftest    # the chain end to end, against /dev/null: 95 checks
+python3 -m glasspad --selftest    # the chain end to end, against /dev/null: 107 checks
 python3 tools/check_all.py        # the whole suite: 27 suites, ~35 s
 ```
 
@@ -247,7 +247,7 @@ safe on a live machine, and together they cover most of what can be wrong:
 
 ```bash
 glasspad --status       # library, compositor, /dev/uinput, who grants it, menu entry
-glasspad --selftest     # 95 checks: geometry, mapping, ABI numbers, teardown, licences
+glasspad --selftest     # 107 checks: geometry, mapping, ABI numbers, teardown, licences
 ```
 
 If you are reporting a problem, paste both in full. A symptom without them is a
@@ -255,7 +255,7 @@ conversation that starts with "and what does `--status` say".
 
 | What you see | What it is |
 | --- | --- |
-| Controls draw, animate, and nothing happens in the game | No `/dev/uinput` write access. `--status` says so. Run `glasspad --install-uinput`, then **log out and back in** — a process keeps the groups it started with, and no `udevadm trigger` fixes that. This is the most confusing failure this program has, because everything on screen looks correct. |
+| Controls draw, animate, and nothing happens in the game | No `/dev/uinput` write access. `--status` says so, and **About → Grant gamepad access** opens a terminal that stages the command and waits for Enter. When it finishes, the About box re-checks and tells you which of three things just happened — **restart GlassPad** (the node changed, no log out needed), **log out and back in** (you were added to `input`, and a running program keeps the groups it started with, so restarting cannot help), or **not granted yet** (the terminal has the reason). Run `glasspad --install-uinput`, then **log out and back in** — a process keeps the groups it started with, and no `udevadm trigger` fixes that. This is the most confusing failure this program has, because everything on screen looks correct. |
 | Overlay appears on the desktop but vanishes in a game | The game has an **exclusive fullscreen** grab, which takes the screen from the compositor, and a layer surface lives in the compositor. Run the game in borderless/windowed fullscreen. |
 | No overlay at all, and `--status` mentions `zwlr_layer_shell_v1` | Your compositor does not offer layer-shell. Stock GNOME is the usual one; KWin, Hyprland, Sway and wlroots do. |
 | No overlay, and the library was not found | `libgtk4-layer-shell` is not installed, or is a different GTK 4 minor than the one linked. `glasspad --explain` says which, and whether a package command would even work here. `--status` names the package for your distro; it is the line to trust over any table in a README. |
@@ -347,9 +347,9 @@ green-looking tree.
 
 | piece | tally on this machine |
 | --- | --- |
-| stdlib suites (25 files) | **315 passed** |
+| stdlib suites (27 files) | **342 passed** |
 | pytest-style suite, via `tools/run_tests.py` | **91 passed, 0 skipped** |
-| in-app self-test (`--selftest`: hub, resize, rotation, profiles, turbo, licence reader) | **95 checks** |
+| in-app self-test (`--selftest`: hub, resize, rotation, profiles, turbo, licence reader, grant verdicts) | **107 checks** |
 
 Those are what the runner prints, not an assertion: no test compares this table to the
 runner, because a number that has to be edited every time a test is added is a number people

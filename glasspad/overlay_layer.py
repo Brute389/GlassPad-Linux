@@ -2073,10 +2073,20 @@ class Overlay:
         # window instead. It does not escalate anything: the terminal runs our own
         # command, and the password prompt stays inside pkexec where it can be refused.
         self.grant_pill = None
+        self.grant_note = None
         if getattr(self.service, "fell_back_to_null", False):
             self.grant_pill = self._pill("Grant gamepad access", "",
                                          self._grant_access, 200, 34)
             box.append(self._row(self.grant_pill))
+            # Empty until the button is pressed, then the verdict -- see _watch_grant.
+            # A LABEL, and the pill stays a BUTTON: relabelling the action away would
+            # leave a control that does nothing when pressed, and a refused password
+            # prompt has to be retryable from the same place.
+            self.grant_note = self._caption("", "status")
+            self.grant_note.set_wrap(True)
+            self.grant_note.set_max_width_chars(48)
+            self.grant_note.set_xalign(0.5)
+            box.append(self.grant_note)
         box.append(self._row(self._pill("Close", "grey", self._close_info, 120, 34)))
 
         self.info.set_child(box)
@@ -2119,8 +2129,56 @@ class Overlay:
         print(f"[grant] {note}", file=sys.stderr, flush=True)
         if ok:
             self._say("terminal opened \u2014 approve the password prompt there")
+            self._watch_grant()
         else:
             self._say("no terminal found \u2014 see the command on stderr")
+
+    def _watch_grant(self) -> None:
+        """Follow the grant to its end, because the terminal closes and this app stays open.
+
+        The grant is not one outcome, it is three, and the thing a user tries first is the
+        one that cannot work. When the rule and the ACL changed the NODE, a new process gets
+        the pad and a restart is the fix. When the grant added the account to `input`, this
+        process still carries the credentials it was started with, and no amount of
+        restarting, re-reading the rule or `udevadm trigger` changes that -- only a new login
+        does. Telling somebody to restart in the second case spends their patience on a
+        no-op, and they conclude the app is broken rather than that they are one log out
+        away from it.
+
+        So the box asks two questions on a timer and says which answer it got. The logic is
+        in glasspad/pad.py (`grant_state`), where all three states can be produced on demand
+        and asserted against; this is only the timer and the label.
+        """
+        self._grant_polls = 0
+        self._grant_verdict = None
+        GLib.timeout_add_seconds(2, self._poll_grant)
+
+    def _poll_grant(self) -> bool:
+        """One look. Returns True to keep the timer running, False to stop it."""
+        from glasspad import pad as _pad
+
+        verdict, detail = _pad.grant_state()
+        self._grant_polls = getattr(self, "_grant_polls", 0) + 1
+        if verdict != getattr(self, "_grant_verdict", None):
+            self._grant_verdict = verdict
+            self._set_grant_note(detail, ok=verdict != _pad.GRANT_PENDING)
+            if verdict != _pad.GRANT_PENDING:
+                # Out loud as well as on the label: the About box is usually closed while
+                # the terminal is up, and the toast is what the user is looking at.
+                self._say(detail)
+        return _pad.keep_polling(verdict, self._grant_polls)
+
+    def _set_grant_note(self, text: str, ok: bool = False) -> None:
+        note = getattr(self, "grant_note", None)
+        if note is None:
+            return                          # no pill means we are not in that state
+        try:
+            note.set_text(text)
+            if ok:
+                note.add_css_class("ok")
+        except Exception as exc:            # noqa: BLE001 - a label is not a failure
+            print(f"[grant] could not update the verdict label: {exc}",
+                  file=sys.stderr, flush=True)
 
     def _open_info(self) -> None:
         self._close_fab()                     # window.py does exactly this first
@@ -2566,6 +2624,56 @@ class Overlay:
             self.turbo.hz = DEFAULT_TURBO_HZ
             return False
 
+        def step_grant_verdict():
+            """What the About box says AFTER the grant terminal has closed.
+
+            Three outcomes, three sentences -- because the action a user reaches for first
+            (restart the app) is the one that cannot work when the grant arrived as group
+            membership: a running process keeps the groups it started with, so only a new
+            login helps. Which of the three applies is decided in glasspad/pad.py and tested
+            there; this step proves the part no headless suite can -- that the real label on
+            the real panel changes, that the toast repeats it, and that the timer stops at a
+            verdict instead of polling for the rest of the session.
+            """
+            from glasspad import pad as _pad
+
+            if getattr(self, "grant_note", None) is None:
+                check("the About box has a verdict label while there is no pad", False)
+                return False
+            check("the verdict label starts empty: nothing has been attempted yet",
+                  self.grant_note.get_text() == "")
+
+            saved_state, saved_say = _pad.grant_state, self._say
+            said = []
+            self._say = lambda text: said.append(text)
+            seen = []
+            try:
+                for state, groups, can in ((_pad.GRANT_PENDING, set(), False),
+                                           (_pad.GRANT_RELOGIN, {"input"}, False),
+                                           (_pad.GRANT_RESTART, set(), True)):
+                    _pad.grant_state = (lambda st=state, g=groups, c=can:
+                                        (st, _pad.GRANT_MESSAGES[st]))
+                    self._grant_verdict = None
+                    self._grant_polls = 0
+                    keep = self._poll_grant()
+                    seen.append((state, self.grant_note.get_text(), keep))
+            finally:
+                _pad.grant_state = saved_state
+                self._say = saved_say
+
+            for state, text, keep in seen:
+                check(f"{state}: the panel shows its own wording ({text[:26]!r})",
+                      text == _pad.GRANT_MESSAGES[state])
+                check(f"{state}: the toast carries it too", len(said) >= 1)
+                check(f"{state}: timer {'kept running' if keep else 'stopped'}",
+                      keep == (state == _pad.GRANT_PENDING))
+            relogin = _pad.GRANT_MESSAGES[_pad.GRANT_RELOGIN]
+            check("and the membership verdict warns that restarting will not help",
+                  "Restarting" in relogin and "LOG IN" in relogin)
+            check("while the node verdict says a log out is not needed",
+                  "No log out needed" in _pad.GRANT_MESSAGES[_pad.GRANT_RESTART])
+            return False
+
         def step_disable_off():
             self._hub_press("disable")
             check("tap hides the pad", not self.overlay_enabled)
@@ -2914,7 +3022,7 @@ class Overlay:
                  step_watchdog_arm, step_watchdog_fire,
                  step_ghost_arm, step_ghost_after,
                  step_turbo_arm, step_turbo_fired, step_turbo_released,
-                 step_grant_route,
+                 step_grant_route, step_grant_verdict,
                  step_disable_off,
                  step_disable_on, step_edit_off_via_confirm, step_info, step_licence, step_dpad, step_profile_setup, step_profile_switch,
                  step_profile_defer, step_profile_cycle, step_live_geom, step_hide_fence, step_edge_gate, step_stick, step_stick_ui, step_quit_guard,
