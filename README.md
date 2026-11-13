@@ -59,6 +59,25 @@ it was a second GUI toolkit, a third of the package bytes, and nothing inside a 
 artefact that exercised it. Its module names survive only in `glasspad/bundle.py`, as the
 list the artefact tests refuse to ship.
 
+## Tested on
+
+One column says *measured*, the other says *reasoned about*, and the difference is the
+whole point of writing this down: a compatibility list that does not distinguish them is
+advertising.
+
+| Compositor | Status | What that actually means |
+| --- | --- | --- |
+| **KDE Plasma, KWin on Wayland** | **measured** | Everything in this README — every pixel measurement, every stacking claim, the in-game tests, the four-simultaneous-touch checks, the udev grant on a virgin system — was produced on one machine running KWin. This is the reference environment. |
+| **Steam Big Picture / GameScope session** | **measured** | Installed through a controller-oriented manager, launched without a terminal, overlay above a fullscreen game, mapped through Steam Input to the game's own bindings. |
+| Hyprland | reasoned, not run | Needs `zwlr_layer_shell_v1` and a writable `/dev/uinput`, both of which it has. What has not been checked here is *stacking*: Hyprland's layer rules and its fullscreen handling differ from KWin's, and stacking is the thing that has actually gone wrong in development. `glasspad --status` will tell you the protocol is there; it cannot tell you the overlay lands above your game. |
+| Sway, other wlroots compositors | reasoned, not run | Same protocol, same reasoning, same caveat. Per-control touch-through under a wlroots compositor with a window rule of its own is an open question. |
+| GNOME (mutter) | **not supported** | mutter does not implement `zwlr_layer_shell_v1`. `--status` says so plainly rather than starting an overlay you cannot see. A shell extension that provides the protocol may change that; nobody has tried one. |
+| X11, on any desktop | **not supported** | There is no layer-shell on X11. The Qt/X11 experiment that existed early in this port is deleted, along with PyQt6. |
+
+If you get it working somewhere in the "reasoned" row, that is worth an issue — not a bug
+report, just a sentence saying which compositor and whether the overlay stayed above the
+game. The row is the honest claim; a report is what turns it into the row above it.
+
 ## Install
 
 There is one install, and it is the AppImage. Everything a file can do by itself it does
@@ -414,7 +433,7 @@ Three commands, in order of how much they cost:
 ```bash
 python3 -m glasspad --status      # this machine: library, compositor, grants, profiles
 python3 -m glasspad --selftest    # the chain end to end, against /dev/null: 95 checks
-python3 tools/check_all.py        # the whole suite: 26 suites, ~35 s
+python3 tools/check_all.py        # the whole suite: 27 suites, ~35 s
 ```
 
 `--status` changes nothing. It is the "why is there no overlay on screen" command, and it
@@ -521,6 +540,31 @@ packed copies rather than the checkout.
 
 ## Tests
 
+What runs automatically, and what no runner can check, are both in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) — but the second half is worth
+saying here too, because a green badge that quietly tests less than the README claims is
+the failure mode this project keeps running into:
+
+* **`suite`, headless.** `tools/check_all.py --no-live --no-artifacts` on `ubuntu-24.04`
+  with the runner's own GTK 4 and `python3-gi`. There is no compositor, so the display-
+  dependent tests report **skipped** and the job summary prints the skip counts: a suite
+  that silently stops asserting things is worse than one that is missing. The workflow pins
+  the runner image rather than `-latest`, because a moving image turns a green pipeline red
+  with no commit in between, and the bug you then chase is GTK's.
+* **`artifact`.** Builds the AppImage — which re-runs the whole suite as a gate, executes
+  the staged tree before `mksquashfs` is allowed to touch it, and refuses to pack a red
+  tree — then extracts the finished image and checks the payload *is* the source it claims,
+  that the licence texts and the privileged pair are inside it, and that the runtime offset
+  points at our squashfs. `BUILD-INFO.txt` and the `.sha256` sidecar are uploaded with it.
+* **What CI cannot check, on any runner:** whether the overlay is visible above a
+  fullscreen game, whether a touch lands on the control you aimed at, and whether the
+  compositor's stacking puts the surface where you expect. Those three have been the
+  actual bugs
+  during development of this port — all of them — and they need a screen and a finger.
+  The live self-test (`--selftest`, 95 checks) covers as much of that chain as it can
+  against `/dev/null`, and it is the one suite CI skips.
+
+
 ```bash
 python3 tools/check_all.py                        # everything, ~35 s
 python3 tools/run_tests.py                        # the pytest-style suite on its own
@@ -540,7 +584,7 @@ Current tallies here:
 
 | piece | tally |
 | --- | --- |
-| stdlib suites (24 files) | **297 passed** |
+| stdlib suites (25 files) | **311 passed** |
 | pytest-style suite, via `tools/run_tests.py` | **91 passed, 0 skipped** |
 | in-app self-test (`GLASSPAD_SELFTEST`: real hub, resize, rotation, profiles, turbo, licence reader) | **95 checks** |
 

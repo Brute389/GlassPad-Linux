@@ -1,0 +1,10 @@
+# GitHub shows this file under "Support", and it links SECURITY.md automatically, so the
+# one decision made here is the deliberate one: no blank issues.
+#
+# Not a moderation gesture. Every report about this app that did not include the two
+# diagnostic commands below turned into a round trip, because the overlay has four
+# independent ways to fail -- no Wayland session, no libgtk4-layer-shell, a compositor
+# that does not advertise layer-shell, and a /dev/uinput your account cannot write -- and
+# they look identical from the couch: controls on screen, game unresponsive. `--status`
+# distinguishes all four in about a second, and the answer decides what the fix is.
+blank_issues_enabled: false
