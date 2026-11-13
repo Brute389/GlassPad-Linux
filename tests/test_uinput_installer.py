@@ -14,6 +14,7 @@ unintended consequence, and no way to rehearse the command without changing /etc
 """
 import getpass
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -541,6 +542,107 @@ def test_the_parent_flushes_before_the_child_talks():
     flushes = src.count("sys.stdout.flush()")
     check(f"every spawn is preceded by a flush ({flushes} flushes, {spawns} spawns)",
           spawns > 0 and flushes >= spawns)
+
+
+def test_a_lie_in_the_exit_status_is_not_passed_on_as_failure():
+    """The installer said "writable by josh" and exited 1. Both were on screen.
+
+    install.sh ended its success branch with `[ "$waited" -gt 0 ] && say ...`, which
+    returns 1 when the condition is false -- i.e. whenever the device became writable
+    immediately, the common case. The front end relayed that as "The installer failed",
+    and --install reported "/dev/uinput" as unfinished on a machine where it worked. So
+    the front end re-measures the device instead of trusting the status.
+    """
+    import contextlib
+    import io
+    import subprocess as sp
+
+    import glasspad.__main__ as m
+    from glasspad import pad
+
+    real_call, real_avail = sp.call, pad.uinput_available
+    sp.call = lambda cmd, *a, **k: 1             # the installer claims failure
+    pad.uinput_available = lambda *a, **k: True  # ...and the device disagrees
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = m.install_uinput([])
+    finally:
+        sp.call, pad.uinput_available = real_call, real_avail
+    out = buf.getvalue()
+    check(f"the device wins over the status line (rc={rc})", rc == 0)
+    check("the mismatch is reported rather than swallowed", "IS writable now" in out)
+    check("and the wrong exit code is still named, so the bug gets reported",
+          "exited 1" in out)
+
+
+def test_a_real_failure_is_still_called_a_failure():
+    """The fix must not turn every nonzero into a shrug."""
+    import contextlib
+    import io
+    import subprocess as sp
+
+    import glasspad.__main__ as m
+    from glasspad import pad
+
+    real_call, real_avail = sp.call, pad.uinput_available
+    sp.call = lambda cmd, *a, **k: 1
+    pad.uinput_available = lambda *a, **k: False
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = m.install_uinput([])
+    finally:
+        sp.call, pad.uinput_available = real_call, real_avail
+    check(f"still nonzero when the device really is unwritable (rc={rc})", rc != 0)
+    check("and it says so plainly", "failed with exit 1" in buf.getvalue())
+
+
+def test_install_sh_never_leaves_its_status_to_the_last_print():
+    """A guard for the class of bug, not just the instance.
+
+    `[ cond ] && cmd` returns 1 when cond is false. Legal and idiomatic -- and lethal
+    as the last statement of a branch in a script whose final status is whatever the
+    case fell through to. So: ban the statement form outright, require an explicit exit
+    after the case, and require --check to grade itself rather than its last `say`.
+    """
+    src = open(os.path.join(ROOT, "install.sh")).read()
+    lines = src.splitlines()
+
+    def next_significant(i):
+        for ln in lines[i + 1:]:
+            t = ln.strip()
+            if not t or t.startswith("#"):
+                continue
+            return t
+        return ""
+
+    # `[ cond ] && cmd` returns 1 when cond is false. Harmless in mid-function -- the
+    # function returns something else afterwards -- and fatal as the LAST statement of a
+    # branch whose status becomes the program's. So the rule is positional, not
+    # stylistic: flag it only when the branch ends right there. Line 271's
+    # `[ "$DRY" = 1 ] && return 0` inside udev_settle() is fine precisely because a
+    # `return 0` follows; a guard so blunt it forces cargo-culting is a guard people
+    # switch off.
+    # (the first word that ENDS a block -- `nxt.startswith("")` is true for every
+    # string, which is how this guard flagged a line three times before it was fixed)
+    terminators = {"fi", "else", "elif", "esac", "}", ";;"}
+    bad = []
+    for i, ln in enumerate(lines):
+        if re.match(r"^\s*\[.*\]\s*&&\s", ln):
+            nxt = next_significant(i)
+            first = nxt.split()[0] if nxt.split() else ""
+            if first in terminators:
+                bad.append(f"line {i + 1} ends on it (next is {nxt!r})")
+    check("no branch in install.sh ends on a `[ ... ] && ...`"
+          + (f" ({'; '.join(bad)})" if bad else ""), not bad)
+    tail = src.rsplit("esac", 1)[-1]
+    check("the script exits explicitly after the case", "exit 0" in tail)
+    check("--check propagates do_check's own verdict",
+          "do_check" in src and "exit $?" in src)
+    body = src.split("do_check()")[1] if "do_check()" in src else ""
+    check("and do_check grades the device, not its last say",
+          "test -w /dev/uinput" in body.split("\n}")[0])
 
 
 if __name__ == "__main__":

@@ -566,6 +566,25 @@ def install_uinput(argv: list[str] = ()) -> int:
         print(f"\nAuthorisation declined ({tool} exit 125); nothing was changed.")
         return 1
     if rc != 0:
+        # Measure before agreeing that it failed. On real hardware the installer's exit
+        # status contradicted its own sentence three lines above:
+        #
+        #     writable by josh: GlassPad can create a pad now.
+        #     The installer failed with exit 1
+        #
+        # because `[ "$waited" -gt 0 ] && say ...` was the last statement of the success
+        # path and returned 1 -- whenever the device became writable immediately, which
+        # is the common case. The device is the fact; an exit code is a claim about the
+        # fact, and this program has printed confident wrong verdicts often enough that
+        # the claim gets checked rather than believed.
+        settled, _moved = _uinput_state_settling()
+        if settled:
+            print(f"\nThe installer exited {rc}, but /dev/uinput IS writable now:")
+            print("its status line is wrong, not its work. The grant landed -- confirm")
+            print(f"with:  {bundle.cli_hint()} --status")
+            print("(please report that exit code regardless: a tool that fails loudly")
+            print(" while succeeding is worse than one that is honest about which)")
+            return 0
         print(f"\nThe installer failed with exit {rc}; read its output above.")
         print("GlassPad never started, so there is no half-configured state to untangle.")
         return rc

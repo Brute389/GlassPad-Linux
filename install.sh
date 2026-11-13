@@ -218,6 +218,33 @@ do_check() {
       # people look for it here after a Qt-era note told them to.
       say "  WAYLAND_DISPLAY  : ${WAYLAND_DISPLAY:-<unset -- REQUIRED, no session>}"
       say "  DISPLAY          : ${DISPLAY:-<unset>} (X11; the overlay does not use it)"
+
+    # The status is measured, not inherited from the last print. --check is a gate
+    # (`./install.sh --check && ...`), and until now it exited 0 on a machine where the
+    # device could not be opened at all, because the final command in this function was
+    # a `say`. Only the decisive fact is graded; everything printed above is context.
+    #
+    # A missing udev rule is deliberately NOT a failure: logind's uaccess tag (KDE
+    # Connect, Steam) hands the console user access on many machines, and exiting 1
+    # there would be a wrong verdict about a working install.
+    if [ "$(id -u)" = 0 ]; then
+        # As root, ask the account that matters -- root can always write the node, so a
+        # root-side test proves nothing. su is only safe this way while privileged: run
+        # unprivileged it prompts for the target user's password, and --check must never
+        # prompt for anything.
+        if su -s /bin/sh "$TARGET_USER" -c 'test -w /dev/uinput' 2>/dev/null; then
+            return 0
+        fi
+    else
+        if test -w /dev/uinput; then
+            return 0
+        fi
+    fi
+    say ""
+    say "verdict: $TARGET_USER cannot write /dev/uinput, so GlassPad cannot make a"
+    say "         pad here. --user cannot fix that; run it with root:"
+    say "             ./install.sh --uinput"
+    return 1
 }
 
 # --- uinput -----------------------------------------------------------------
@@ -479,6 +506,7 @@ uninstall() {
 case "$MODE" in
     check)
         do_check
+        exit $?   # the gate: do_check grades itself, and nothing downstream softens it
         ;;
     uninstall)
         uninstall
@@ -585,7 +613,16 @@ case "$MODE" in
             say "  /dev/uinput : $perms"
             if [ "$as_user" = yes ]; then
                 say "  writable by $TARGET_USER: GlassPad can create a pad now."
-                [ "$waited" -gt 0 ] && say "  (took $(($waited / 4))s for udev to apply the rule)"
+                if [ "$waited" -gt 0 ]; then
+                    say "  (took $(($waited / 4))s for udev to apply the rule)"
+                fi
+                # Deliberately an if, not `[ "$waited" -gt 0 ] && say ...`. That form
+                # returns 1 when the condition is false, and it sat as the LAST statement
+                # of the success branch: on the fast path (module already loaded, node
+                # writable at once) a completely successful --uinput exited 1, and the
+                # Python front end printed "The installer failed with exit 1" three lines
+                # under "writable by josh: GlassPad can create a pad now." The happy path
+                # was the broken one, which is why no dry run ever caught it.
             elif [ "$GROUP_WAS_ADDED" = 1 ]; then
                 say "  NOT writable by $TARGET_USER."
                 say "  This run added you to group input, and a process keeps the groups"
@@ -599,6 +636,7 @@ case "$MODE" in
                 say "          grep -E '99-glasspad|MODE|GROUP|uaccess'"
                 say "  A rule with TAG+=\"uaccess\" for another account, or a setfacl"
                 say "  line further down the list, both win over mode bits here."
+                exit 1        # genuinely broken: this branch must not exit 0
             fi
         fi
         ;;
@@ -634,3 +672,9 @@ case "$MODE" in
         say "done. Verify with:  python3 -m glasspad --status"
         ;;
 esac
+
+# Reaching here means the chosen branch finished without saying otherwise. Without this
+# the program's exit status is whatever the last command inside the case happened to
+# return -- a `say`, a comparison, anything -- and an install script is precisely where
+# a wrong 0 costs the most.
+exit 0
