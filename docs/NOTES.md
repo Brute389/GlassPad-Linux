@@ -24,6 +24,7 @@ Split out of `README.md`, verbatim — nothing here was rewritten for the move.
 * [Stacking, and what this device is bound to](#stacking-and-what-this-device-is-bound-to)
 * [Device details worth knowing](#device-details-worth-knowing)
 * [Why the licence reader is inside the app](#why-the-licence-reader-is-inside-the-app)
+* [Why GlassPad does not install packages for you](#why-glasspad-does-not-install-packages-for-you)
 
 ---
 
@@ -777,4 +778,63 @@ nothing.
 Both documents are conditions of shipping, so `tools/make_appimage.sh` aborts when either
 is absent, and the artefact suite imports the packed `bundle.py` from inside the AppImage to
 prove the panel resolves them in the layout that only exists after packing.
+
+---
+
+## Why GlassPad does not install packages for you
+
+Three reasons, in descending order of how much they hurt to get wrong.
+
+**The instruction was wrong for the audience most likely to need it.** `DEPENDENCY_PACKAGES`
+carried a row labelled "Debian / Ubuntu / SteamOS". SteamOS reports `ID=steamos
+ID_LIKE=arch`, so that row never matched a Deck; the *Arch* row matched, and a Deck user was
+handed `sudo pacman -S gtk4-layer-shell` against a read-only base image -- an error naming
+neither GlassPad nor the reason. Deck and RetroDeck users are precisely the people who install
+through Shelly or Big Picture, because that is how you get an app onto a machine you drive with
+a controller. A label naming a distro whose package manager it does not use is not a typo; it
+is an instruction.
+
+**"No package command would work here" is a fact about the machine, and it is measurable.**
+`glasspad/deps.py` measures rather than guessing from a name: `/run/ostree-booted`
+(Bazzite, Bluefin), `steamos-readonly` or `ID=steamos`, `/nix/store`, the options `/` is
+mounted with, and which manager binary exists. Every one is injectable, so the suite asserts
+against eight synthetic systems -- CachyOS, Fedora, Bazzite, SteamOS, NixOS, Debian, a
+read-only root and something unrecognisable -- rather than against the one machine that
+happened to write the test. One of the two seams needed fixing to get there:
+`package_name()` reached through `dependency_rows()` into the *host's* /etc/os-release, so a
+Debian fixture was quietly handed the Arch package name, in a test written to prove package
+naming was correct.
+
+**Even on a machine where it would work, the transaction is not ours to run.** Installing a
+package pulls a dependency closure into somebody's system. What GlassPad does instead is open
+a terminal with the exact command displayed and `read` waiting for Enter -- `staged_run()`,
+which the suite tests by running it: Enter executes, EOF exits 130 and nothing changes, so
+handing it to a non-interactive terminal-open is safe by construction rather than by hope.
+
+### The failure this all replaced
+
+Not a bad message -- *no* message. On a machine without the library, `overlay_layer` raises
+while importing:
+
+```
+ValueError: Namespace Gtk4LayerShell not available
+```
+
+and that happens before `__main__` could print the dependency hint it had, so the process died
+with a traceback into a stdout a manager-launched app does not have. Every word of guidance in
+`dependency_hint()` was written for a situation it could never be shown in. Reproducing it took
+hiding the typelib, because no machine in the development path had the real condition.
+
+### Two ways this went wrong while it was being built, recorded because both are generic
+
+* **`set_keep_above()` does not exist in GTK 4.** It raised inside the `activate` handler,
+  where an exception does not reach the caller's `try`; GTK printed a warning and carried on
+  running an application with no window. So "we show a notice" described a live process
+  displaying nothing -- and the entire headless suite stayed green, because none of it builds
+  a widget. The live suite now asks the toolkit directly (`get_mapped()`, size) rather than
+  trusting that reaching the code means anything appeared.
+* **A 46% pixel difference was not the window.** The first measurement of the notice compared
+  two frames and reported a large, screen-wide delta -- and meant nothing of the kind. Verify
+  with an instrument that answers the question you asked, and know what your instrument returns
+  when the answer is "nothing".
 

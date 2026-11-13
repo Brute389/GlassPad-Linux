@@ -135,8 +135,25 @@ def report_status() -> int:
 
     lib, why = bundle.layer_shell_path()
     print(f"layer-shell lib : {lib or 'NOT FOUND'}  (via {why})")
+
+    # Whether a command would even work HERE, printed before any command is suggested.
+    # Deck, RetroDeck, Bazzite and Bluefin users are the audience most likely to be reading
+    # this through a controller launcher, and the Arch-family command that is right on
+    # CachyOS is wrong on every one of them.
+    from glasspad import deps as _deps
+
+    prof = _deps.system_profile()
+    cmd = _deps.install_command(prof)
+    print(f"system          : {'package command would work' if prof['mutable'] else 'NO package command would work'}"
+          f"  ({prof['measured']})")
+    if not prof['mutable']:
+        print(f"                  {prof['reason']}")
+    print(f"package         : {_deps.package_name(prof) or 'unknown'}"
+          + (f"   run: {' '.join(cmd)}" if cmd else "   (no command offered)"))
+
     if not lib:
         print(bundle.dependency_hint())
+        print("The same explanation, plus what this machine allows: glasspad --explain")
         return 1
 
     # Everything below needs the library to load and a display to ask. Each step is
@@ -337,9 +354,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nusage: glasspad [--status] [--edit] [--profile NAME] "
               f"[--install] [--install-uinput|--uninstall-uinput] "
               f"[--install-desktop|--uninstall-desktop] [--selftest] "
-              f"[--backend {BACKEND}]")
+              f"[--explain] [--backend {BACKEND}]")
         print("  overlay_layer owns the remaining options; --help there lists them")
         return 0
+    if rest and rest[0].startswith("--explain"):
+        # Plain text, no display, no root, exit 0: this is the answer to "why is there no
+        # overlay" that a person can paste into a bug report, and the thing to print when a
+        # window would be pointless (over ssh, before a session starts).
+        return explain_missing(rest)
     # The usage line below advertises --selftest, so --selftest has to be a flag.
     # It was not: the selftest actually lives behind GLASSPAD_SELFTEST=1 plus
     # --null-pad -- which is exactly what tools/check_all.py passes -- and argparse
@@ -353,11 +375,61 @@ def main(argv: list[str] | None = None) -> int:
         rest = [a for a in rest if a != "--selftest"]
         if not any(a.startswith("--null-pad") or a.startswith("--pad") for a in rest):
             rest.append("--null-pad")
-    from glasspad.overlay_layer import main as run_layer
+    try:
+        from glasspad.overlay_layer import main as run_layer
+    except (ValueError, ImportError) as exc:
+        # THIS is what a machine without libgtk4-layer-shell looks like from the inside:
+        # gi.require_version("Gtk4LayerShell", "1.0") raises while importing the overlay,
+        # so nothing below this point ever ran -- including the guidance written for exactly
+        # this case. Simulated with the typelib hidden, because it never appeared on a
+        # machine that had the package installed:
+        #     ValueError: Namespace Gtk4LayerShell not available
+        # Where it goes now: a window, when there is a display to draw one on; the same
+        # paragraphs to stderr when there is not. A traceback is not a user interface.
+        from glasspad import deps as _deps
+        from glasspad import notice as _notice
+        sys.stderr.write(f"overlay could not start: {type(exc).__name__}: {exc}\n")
+        wayland = os.environ.get("WAYLAND_DISPLAY") or os.environ.get("WAYLAND_SOCKET")
+        if wayland:
+            return _notice.run("missing")
+        _deps.print_notice("missing")
+        return 4
     code = run_layer(rest)
     if code:
         sys.stderr.write(bundle.dependency_hint())
     return code
+
+
+def explain_missing(argv: list[str] | None = None) -> int:
+    """Why there is no overlay, in text, with this machine's answer to what to do about it.
+
+    The state is detected rather than trusted from the flag: asking `--explain=missing` on a
+    machine that has the library would otherwise print advice about installing something that
+    is already installed, which is the kind of confidently wrong sentence that makes people
+    ignore the next diagnostic too. An explicit `--explain=nocompositor` is still honoured,
+    because someone may know their compositor and want that text.
+    """
+    from glasspad import deps as _deps
+
+    # Asked, not assumed. "Is the file on disk" and "will the overlay draw" are different
+    # claims, and answering the second with the first is how a healthy machine got told its
+    # library was unusable on this command's first run. (The NameError two revisions back --
+    # `bundle` is not a module-level name in this file -- is why the test for this command
+    # runs it as a subprocess rather than calling it.)
+    detected, detail = _deps.probe_bound()
+    state, forced = detected, False
+    for arg in (argv or []):
+        if arg.startswith("--explain="):
+            state, forced = arg.split("=", 1)[1], True
+    prof = _deps.system_profile()
+    print(f"probed: {detected} -- {detail}")
+    if forced:
+        print(f"asking as: {state} (forced by the flag)")
+    if not prof["mutable"]:
+        print(f"system: {prof['reason']}")
+    print("")
+    _deps.print_notice(state)
+    return 0
 
 
 def _host_python() -> str:

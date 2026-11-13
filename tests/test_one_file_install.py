@@ -359,10 +359,25 @@ def test_no_message_hard_codes_a_command_that_might_not_exist():
 
     Scanned from tokens rather than with grep so comments and docstrings -- where the
     old wording is quoted to explain why it was wrong -- do not trip it.
+
+    Two files are allowed to spell it, because in both cases the text is printed where a
+    command can actually be typed -- and the test then checks they keep doing that, rather
+    than letting the allowlist widen into "a file that happens to contain instructions":
+
+      * `deps.py` -- its prose goes to a terminal (`--explain`, and the terminal window the
+        notice opens), where the CLI form is right and a PATH lookup is irrelevant.
+      * `__main__.py` -- `--status` and the no-display fallback, which are terminal output
+        by definition.
+
+    The rule still bites everywhere else, which is where it matters: the overlay's on-screen
+    messages are read on a tablet, held in two hands, with no terminal anywhere near, and
+    those go through `bundle.cli_hint()`.
     """
     import ast
 
+    TERMINAL_CONTEXT = {"deps.py", "__main__.py"}
     offenders = []
+    spelled = []
     pkg = os.path.join(ROOT, "glasspad")
     for name in sorted(os.listdir(pkg)):
         if not name.endswith(".py"):
@@ -383,9 +398,30 @@ def test_no_message_hard_codes_a_command_that_might_not_exist():
                 if id(node) in docstrings:
                     continue
                 if "glasspad --" in node.value:
-                    offenders.append(f"{name}:{node.lineno}")
+                    (spelled if name in TERMINAL_CONTEXT else offenders
+                     ).append(f"{name}:{node.lineno}")
     check("no string literal tells the user to run `glasspad --...` "
           + (f" ({', '.join(offenders)})" if offenders else ""), not offenders)
+    # The allowlist is a claim about WHERE text is printed, so the claim is checked: if the
+    # terminal-context files stopped printing their prose to a terminal -- by routing it
+    # into the overlay, say -- the exemption has to go with it, and this fails.
+    with open(os.path.join(ROOT, "glasspad", "deps.py"), encoding="utf-8") as fh:
+        dep_src = fh.read()
+    # Not "must not import Gtk": probe_bound() opens a Gdk display on purpose, and a check
+    # that banned the string "Gtk" failed against correct code on its first run. The
+    # invariant is about SURFACE: deps.py must never draw, because its text is read in a
+    # terminal -- and if it ever starts drawing, its prose belongs in notice.py with the
+    # rest of the widgets, and this exemption has to be withdrawn.
+    forbidden = ("Gtk.Window", "Gtk.Application", "Gtk.Label", "overlay_layer",
+                 "import notice")
+    drew = [f for f in forbidden if f in dep_src]
+    check(f"deps.py stays terminal-only: no widgets, no overlay ({drew})", not drew)
+    with open(os.path.join(ROOT, "glasspad", "__main__.py"), encoding="utf-8") as fh:
+        main_src = fh.read()
+    check("and __main__.py is where --status and the no-display fallback live",
+          "def report_status" in main_src and "print_notice" in main_src)
+    check("the scan found the spelled forms it knows about",
+          len(spelled) >= 3)
 
 
 if __name__ == "__main__":

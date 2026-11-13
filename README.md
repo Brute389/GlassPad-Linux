@@ -155,6 +155,27 @@ exactly what the last person to install this typed.
 nothing written. Afterwards `--status` ends with one `NEXT:` line, so the report comes
 with its conclusion instead of leaving you to derive it from seven facts.
 
+**If step 1 is what is missing, you get a window, not a traceback.** Until 1.1.0 a machine
+without `libgtk4-layer-shell` died while *importing* the overlay --
+`ValueError: Namespace Gtk4LayerShell not available` -- and the careful instructions written
+for that case never ran, because they lived behind the import. Now there is a dialog: what is
+missing, the package name for your distribution, a **Copy** button, **Check again**, and on a
+machine where installing is possible, **Open a terminal and let me run it** -- which shows the
+command and waits for Enter, so the transaction stays yours. On an image-managed system the
+terminal button is not there at all, and the text says why:
+
+| System | Offered | Why |
+| --- | --- | --- |
+| Arch, Fedora, Debian and friends | command + terminal | a package command works here |
+| SteamOS (Deck, RetroDeck) | neither | base image is read-only; Valve's own advice is not to change it |
+| Bazzite, Bluefin (rpm-ostree) | neither | `dnf install` runs and changes nothing durable; layered packages need a reboot |
+| NixOS | neither | system packages are declared and rebuilt, not installed |
+
+`glasspad --explain` prints the same text with no display, no root and exit 0 -- it probes
+what is actually true here (five answers, not two: `ok`, `missing`, `unbound`, `nocompositor`,
+`nodisplay`), so it is safe to paste into a bug report and safe to run over ssh. `--status`
+now names the machine's package policy before it names any command.
+
 The narrow commands remain for when you want one step rather than three:
 `--install-uinput`, `--install-desktop`, and their `--uninstall-` counterparts.
 
@@ -237,7 +258,7 @@ conversation that starts with "and what does `--status` say".
 | Controls draw, animate, and nothing happens in the game | No `/dev/uinput` write access. `--status` says so. Run `glasspad --install-uinput`, then **log out and back in** — a process keeps the groups it started with, and no `udevadm trigger` fixes that. This is the most confusing failure this program has, because everything on screen looks correct. |
 | Overlay appears on the desktop but vanishes in a game | The game has an **exclusive fullscreen** grab, which takes the screen from the compositor, and a layer surface lives in the compositor. Run the game in borderless/windowed fullscreen. |
 | No overlay at all, and `--status` mentions `zwlr_layer_shell_v1` | Your compositor does not offer layer-shell. Stock GNOME is the usual one; KWin, Hyprland, Sway and wlroots do. |
-| No overlay, and the library was not found | `libgtk4-layer-shell` is not installed, or is a different GTK 4 minor than the one linked. `--status` names the package for your distro; it is the line to trust over any table in a README. |
+| No overlay, and the library was not found | `libgtk4-layer-shell` is not installed, or is a different GTK 4 minor than the one linked. `glasspad --explain` says which, and whether a package command would even work here. `--status` names the package for your distro; it is the line to trust over any table in a README. |
 | Menu shows an old icon after a reinstall | The artwork changed but the version did not, so the integrated icon **name** did not — and KDE caches rendered pixmaps by name inside `plasmashell`, for the life of the process. The files on disk are right; restart the shell: `systemctl --user restart plasma-plasmashell.service`. Bump the version on artwork changes and the name changes with it. |
 | Second Ctrl-C kills it outright | Intended. The first requests an orderly shutdown (release every button, destroy the pad); the second exits hard, because `os._exit` drops the last `/dev/uinput` fd and the kernel closes the device. No ghost pad is left either way. |
 | A control stays pressed after you let go | Should not happen — the watchdog releases anything held past `--hold-limit`, and a release caused by the watchdog or a hide is not undone by later drag events. If you can reproduce it, capture with `GLASSPAD_LOG=full` (below) and attach `--status`. |

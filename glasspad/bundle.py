@@ -406,8 +406,14 @@ DEPENDENCY_PACKAGES = (
      "library names this package, and `pacman -Ss libgtk4-layer-shell` matches nothing"),
     ("Fedora / Bazzite / Bluefin", ("fedora", "rhel"),
      "gtk4-layer-shell", "not verified on this machine"),
-    ("Debian / Ubuntu / SteamOS", ("debian", "ubuntu"),
+    ("Debian / Ubuntu", ("debian", "ubuntu"),
      "libgtk4-layer-shell0", "not verified on this machine"),
+    # SteamOS used to be listed on the Debian row. It is wrong twice over: SteamOS reports
+    # ID=steamos ID_LIKE=arch, so the Debian row never matches it, and the Arch row that
+    # does match would offer `pacman -S` against a read-only base image. Read-only and
+    # image-managed systems are glasspad/deps.py's business, not a name in a table: it
+    # measures /run/ostree-booted, steamos-readonly, /nix/store and the root mount options
+    # and refuses to suggest a command that cannot work.
 )
 
 
@@ -447,8 +453,29 @@ def dependency_rows() -> list[tuple[str, str, str, bool]]:
     return [(a, b, c, d) for a, b, c, d in rows]
 
 
+def package_for_ids(ids, rows=None) -> str | None:
+    """The package name for a distro id set, without reading this machine.
+
+    `dependency_rows()` reads /etc/os-release, which is right for the hint it prints and
+    wrong for anything that has to answer about a machine it is not running on -- and
+    glasspad/deps.py does exactly that, on purpose, so that a Deck, a Bazzite and a NixOS
+    box can be tested from one suite. Passing the host's ids through a synthetic profile is
+    how a Debian fixture came to be handed the Arch package name, quietly, in a test written
+    to prove package naming was correct.
+    """
+    for _label, matches, pkg, _verified in (rows or DEPENDENCY_PACKAGES):
+        if any(i == m or i.startswith(m + "_") for m in matches for i in (ids or ())):
+            return pkg
+    return None
+
+
 def dependency_hint() -> str:
-    """The install instruction, generated from the machine rather than from memory."""
+    """The install instruction, generated from the machine rather than from memory.
+
+    This is the TEXT. glasspad/deps.py owns the POLICY -- whether a command would work at
+    all on an image-managed system -- and glasspad/notice.py owns the window. Kept separate
+    because a hint that assumes it may be obeyed is exactly what went wrong on SteamOS.
+    """
     rows = dependency_rows()
     local = rows[0] if rows and rows[0][3] else None
     lines = [

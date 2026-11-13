@@ -3115,6 +3115,14 @@ def main(argv: list[str] | None = None) -> int:
               "python3 -m glasspad.overlay_layer\n"
               f"         (found via {LAYER_SHELL_WHY}; override the search with "
               f"{GLASSPAD_ENV_HINT})")
+        # Draw nothing, and say so where it can be seen. Before this the process printed the
+        # above to a stdout nobody had, exited 3, and left a person with a desktop that
+        # looked untouched -- the closest thing this app has to a silent failure, and the
+        # blank-overlay case the README warns about. The selftest is exempt: it runs legs
+        # that are headless by design, and a window waiting for a click would hang the suite.
+        if not os.environ.get("GLASSPAD_SELFTEST"):
+            from glasspad import notice as _notice
+            _notice.run("unbound")
         return 3
 
     opacity = args.opacity if args.opacity is not None else file_opacity
