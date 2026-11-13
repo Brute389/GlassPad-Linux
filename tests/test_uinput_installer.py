@@ -321,6 +321,114 @@ def test_uninstall_is_documented_in_both_places():
     check("the app's own --help lists it too", "--uninstall-uinput" in h.stdout)
 
 
+def test_flags_are_tested_through_main_not_just_the_function():
+    """A test that calls the function skips the dispatch users actually take.
+
+    uninstall_uinput() grew --dry-run support and a test drove it directly with
+    ["--dry-run"], so it stayed green while main() went on calling the function with
+    no arguments at all. The user-visible result: `glasspad --uninstall-uinput
+    --dry-run` skipped straight to a pkexec prompt and deleted real files. Both
+    flags are driven through main() here, with the actual call stubbed so that a
+    regression fails a test instead of changing /etc.
+    """
+    import subprocess as sp
+    import glasspad.__main__ as m
+
+    calls, real = [], sp.call
+    sp.call = lambda cmd, *a, **k: (calls.append(list(cmd)), 0)[1]
+    try:
+        for flag in ("--install-uinput", "--uninstall-uinput"):
+            calls.clear()
+            m.main([flag, "--dry-run"])
+            got = calls[-1] if calls else []
+            check(f"{flag} --dry-run reaches the installer unprompted ({got[:1]})",
+                  bool(got) and got[0] == "sh")
+            # install.sh's modes are --uinput / --uninstall-uinput; the app-level
+            # flag is not forwarded verbatim, so pin the mode that actually runs.
+            mode = "--uinput" if flag == "--install-uinput" else "--uninstall-uinput"
+            check(f"{flag} --dry-run asks for mode {mode} with the rehearsal flag",
+                  mode in got and "--dry-run" in got)
+    finally:
+        sp.call = real
+
+
+def test_root_is_never_handed_a_path_inside_the_appimage():
+    """The payload is a FUSE mount that root may not read.
+
+    /tmp/.mount_GlassXXX/... is `ro,nosuid,nodev,user_id=1000` with no allow_other,
+    and the kernel restricts such a mount to the user who created it -- root
+    included. Handing pkexec a script inside it produced
+
+        /usr/bin/sh: /tmp/.mount_GlassPPPgJgO/usr/share/glasspad/install.sh:
+        Permission denied      (exit 126)
+
+    on the first genuine install attempt, after every dry run had passed: none of
+    them elevated, so none of them needed a second user's read permission. The fake
+    mount below reproduces the shape -- a payload path whose install.sh is readable
+    to us and staged out before the (stubbed) privileged call.
+    """
+    import subprocess as sp
+    import glasspad.__main__ as m
+
+    src = os.path.join(ROOT, "install.sh")
+    rule_src = os.path.join(ROOT, "packaging", "glasspad-udev.rules")
+    mount = tempfile.mkdtemp(prefix=".mount_FakeAppI")
+    payload = os.path.join(mount, "usr", "share", "glasspad")
+    os.makedirs(os.path.join(payload, "packaging"))
+    shutil.copyfile(src, os.path.join(payload, "install.sh"))
+    shutil.copyfile(rule_src, os.path.join(payload, "packaging", "glasspad-udev.rules"))
+
+    seen = {}
+
+    def fake(cmd, *a, **k):
+        cmd = list(cmd)
+        script = cmd[-2]
+        seen["cmd"] = cmd
+        seen["outside_mount"] = ".mount_" not in script
+        seen["identical"] = (open(script, "rb").read() == open(src, "rb").read())
+        seen["rule_beside"] = os.path.exists(
+            os.path.join(os.path.dirname(script), bundle.RULE_REL))
+        seen["dir"] = os.path.dirname(script)
+        seen["mode"] = oct(os.stat(seen["dir"]).st_mode & 0o777)
+        return 0
+
+    saved_find, saved_call = bundle.find_installer, sp.call
+    bundle.find_installer = lambda: os.path.join(payload, "install.sh")
+    sp.call = fake
+    try:
+        m.install_uinput([])            # a REAL run: must elevate, via a staged copy
+    finally:
+        sp.call = saved_call
+        bundle.find_installer = saved_find
+        shutil.rmtree(mount, ignore_errors=True)
+
+    check(f"a staged script was handed over at all ({seen.get('cmd', 'nothing ran')})",
+          bool(seen))
+    check("the script is NOT inside the mount", seen.get("outside_mount"))
+    check("and is byte-identical to the shipped installer", seen.get("identical"))
+    check("the udev rule travels beside it (install.sh resolves it relative to $0)",
+          seen.get("rule_beside"))
+    check(f"staged dir is private to us, not world-writable ({seen.get('mode')})",
+          seen.get("mode") == "0o700")
+    check(f"the elevated command still asks for privilege ({seen.get('cmd', [''])[0]})",
+          seen.get("cmd", [""])[0] in ("pkexec", "sudo"))
+    gone = not os.path.exists(seen.get("dir", ""))
+    check("and the staging directory is cleaned up afterwards", gone)
+
+
+def test_a_checkout_installer_is_used_in_place():
+    """No copying where root can already read: /home is fine, and a copy would
+    obscure which file is about to run as root."""
+    src = os.path.join(ROOT, "install.sh")
+    before = {d for d in os.listdir(tempfile.gettempdir())
+              if d.startswith("glasspad-installer-")}
+    with bundle.staged_installer(src) as got:
+        check("same path, no detour", got == src)
+    after = {d for d in os.listdir(tempfile.gettempdir())
+             if d.startswith("glasspad-installer-")}
+    check("nothing was staged", before == after)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

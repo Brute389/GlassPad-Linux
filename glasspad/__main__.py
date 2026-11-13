@@ -222,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         return install_uinput(rest)
     if "--uninstall-uinput" in rest:
         # Narrower than install.sh --uninstall on purpose; see install_uinput().
-        return uninstall_uinput()
+        return uninstall_uinput(rest)
     if "--install-desktop" in rest:
         # Also before the session check: a menu entry has nothing to do with a
         # running compositor, and this is the command that makes a downloaded
@@ -296,13 +296,19 @@ def uninstall_uinput(argv: list[str] = ()) -> int:
         print(f"    sh {installer} --uninstall-uinput")
         return 2
 
-    cmd = [tool, "sh", installer, "--uninstall-uinput"]
     dry = "--dry-run" in argv
     if dry:
-        cmd = cmd[1:] + ["--dry-run"]
         print("(--dry-run: the installer will report and change nothing)")
-
-    rc = subprocess.call(cmd)
+    with bundle.staged_installer(installer) as staged:
+        if not staged:
+            print("the installer could not be copied somewhere root can read it")
+            return 2
+        if staged != installer:
+            print(bundle.STAGED_NOTE)
+        cmd = (["sh"] if dry else [tool, "sh"]) + [staged, "--uninstall-uinput"]
+        if dry:
+            cmd.append("--dry-run")
+        rc = subprocess.call(cmd)
     if rc == 125:
         print(f"\nAuthorisation declined ({tool} exit 125); nothing was changed.")
         return 1
@@ -380,16 +386,27 @@ def install_uinput(argv: list[str] = ()) -> int:
     # the real installer instead -- the resolver searched past the empty override
     # directory and found a checkout, which is correct behaviour and a live
     # change to /etc.
-    cmd = [tool, "sh", installer, "--uinput"]
     dry = "--dry-run" in argv
     if dry:
-        cmd.append("--dry-run")
         print("(--dry-run: the installer will report and change nothing)")
-        # No privilege elevation at all for a dry run: install.sh --uinput --dry-run
-        # is safe unprivileged, and asking for a password to read a plan is absurd.
-        cmd.pop(0)
-
-    rc = subprocess.call(cmd)
+    # No privilege elevation at all for a dry run: install.sh --uinput --dry-run is
+    # safe unprivileged, and asking for a password to read a plan is absurd.
+    #
+    # staged_installer() is not decoration. Inside an AppImage this script lives on a
+    # FUSE mount that only the mounting user may read, so pkexec used to fail with
+    # EACCES on the open() -- found on a real virgin install, and invisible to every
+    # dry run, because a dry run does not elevate and so reads the file as the user
+    # who IS allowed to read it.
+    with bundle.staged_installer(installer) as staged:
+        if not staged:
+            print("the installer could not be copied somewhere root can read it")
+            return 2
+        if staged != installer:
+            print(bundle.STAGED_NOTE)
+        cmd = (["sh"] if dry else [tool, "sh"]) + [staged, "--uinput"]
+        if dry:
+            cmd.append("--dry-run")
+        rc = subprocess.call(cmd)
     if dry:
         return rc
     if rc == 125:
