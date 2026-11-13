@@ -7,8 +7,15 @@ checker was happy (every self.X resolved), the hub self-test passed (it drives h
 buttons, not gamepad controls), and the screenshots looked correct. Releasing a
 button simply never reached the pad, so every press would have latched forever.
 
-Pixels cannot fail a missing release. This can, and it needs no display: Overlay's
-constructor makes no windows, so a fake service is enough.
+Pixels cannot fail a missing release. This can, and mostly needs no display: Overlay's
+constructor makes no windows, so a fake service is enough for eight of these ten. The two
+edit-mode tests build real input controllers, which is the one place GTK has to be
+initialised -- and on a headless box (a CI runner, a fresh clone over ssh) that raises
+"Gtk couldn't be initialized". They now SKIP out loud rather than fail, because a suite that
+fails for want of a monitor teaches people to ignore the suite.
+
+That claim used to read "it needs no display", which was true of the machine it was written
+on and of exactly eight of its tests.
 
 Run directly: python3 tests/test_press_release.py
 """
@@ -156,8 +163,42 @@ def test_the_animation_actually_decays_over_time():
     assert all(d <= 1e-6 for d in deltas), f"press went up during its release: {seen}"
 
 
+
+class SkipTest(Exception):
+    """Raised by skip_without_display(); the runner below counts it apart from FAIL."""
+
+
+def skip_without_display() -> None:
+    """Two of these reach `Gtk.Window()` -- edit mode makes a real surface for the knob.
+
+    The probe is `Gdk.Display.get_default()`, measured rather than guessed, because the
+    thing GTK's own error message tells you to call is not a check: on GTK 4
+    `Gtk.init_check()` returns True with no compositor at all, while `Gtk.Window()` then
+    raises "Gtk couldn't be initialized. Use Gtk.init_check()". Verified on this machine in
+    both states -- headless: init_check True, display None; on the Wayland session: both
+    fine. Constructing a throwaway window to find out would be a more honest probe and a
+    worse one, because a window that appears and vanishes during a test suite is exactly
+    the sort of thing people then guard with a skip.
+    """
+    try:
+        import gi
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gdk
+    except Exception as exc:                                # noqa: BLE001
+        raise SkipTest(f"no GTK bindings ({exc.__class__.__name__})") from exc
+    try:
+        have_display = Gdk.Display.get_default() is not None
+    except Exception as exc:                                # noqa: BLE001
+        # "we could not find out" has to mean SKIP, not ERROR. That distinction is the
+        # whole reason the guard exists: an environment that cannot be tested must not be
+        # reported as code that failed.
+        raise SkipTest(f"display probe raised {exc.__class__.__name__}") from exc
+    if not have_display:
+        raise SkipTest("no Wayland/X11 display -- edit mode needs a real Gtk.Window")
+
 def test_edit_mode_swaps_controllers_both_ways():
     """The bug this guards: dropping the input controller and never reattaching it."""
+    skip_without_display()
     ov, _svc = fresh()
     attached = {"A": "input"}
 
@@ -187,6 +228,7 @@ def test_edit_mode_repaints_every_control():
     redraw by accident. Opening edit mode from the hub is the only real path, and it
     was the broken one.
     """
+    skip_without_display()
     class FakeWin:
         def remove_controller(self, _c): pass
         def add_controller(self, _c): pass
@@ -215,16 +257,22 @@ def test_edit_mode_repaints_every_control():
 
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    failed = 0
+    failed = skipped = 0
     for fn in tests:
         try:
             fn()
             print(f"  ok    {fn.__name__}")
+        except SkipTest as exc:
+            skipped += 1
+            print(f"  SKIP  {fn.__name__}: {exc}")
         except AssertionError as exc:
             failed += 1
             print(f"  FAIL  {fn.__name__}: {exc}")
         except Exception as exc:                       # noqa: BLE001
             failed += 1
             print(f"  ERROR {fn.__name__}: {type(exc).__name__}: {exc}")
-    print(f"\n  {len(tests) - failed} passed, {failed} failed of {len(tests)}")
+    # The tally keeps its shape -- check_all.py fails a suite that prints no number, and
+    # a skip has to be counted there or a headless run looks like a silent pass.
+    print(f"\n  {len(tests) - failed - skipped} passed, {failed} failed, "
+          f"{skipped} skipped of {len(tests)}")
     sys.exit(1 if failed else 0)

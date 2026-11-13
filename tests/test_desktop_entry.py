@@ -153,12 +153,12 @@ def test_icon_is_a_theme_name_never_a_path_into_the_mount():
     the unpacked payload. Harmless there; in an AppImage it is a FUSE mount that
     ceases to exist when the overlay closes, so the menu shows a broken icon.
     """
-    text = de.desktop_text("/home/josh/Downloads/GlassPad.AppImage")
+    text = de.desktop_text("/home/user/Downloads/GlassPad.AppImage")
     icon = [l for l in text.splitlines() if l.startswith("Icon=")]
     check(f"Icon= names the theme entry ({icon})", icon == ["Icon=glasspad"])
     check("no directory in Icon=, so it survives any move of the file",
           "/" not in "".join(icon))
-    mountish = de.desktop_text("/home/josh/GlassPad.AppImage",
+    mountish = de.desktop_text("/home/user/GlassPad.AppImage",
                                workdir="/tmp/.mount_GlassPadiU3x9f")
     check("a mount path is only ever rejected, never echoed into Icon=",
           ".mount_" not in "".join(l for l in mountish.splitlines()

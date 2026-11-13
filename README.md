@@ -184,7 +184,7 @@ that does not exist. Until this existed the message was *"refused: something els
 it"* about our own link. `--status` now reports the state as its own line:
 
 ```
-glasspad cmd    : BROKEN: /home/josh/.local/bin/glasspad -> /old/GlassPad-1.1.0… — that
+glasspad cmd    : BROKEN: ~/.local/bin/glasspad -> /old/GlassPad-1.1.0… — that
                   file is gone (a manager moved it?). Re-point with:  --install-desktop
 menu entry      : 1 from another launcher: ~/.local/share/applications/appimage-GlassPad.desktop
 ```
@@ -486,6 +486,10 @@ packed copies rather than the checkout.
 | `GLASSPAD_BIN_DIR` | Where the `glasspad` command on `PATH` is created. Default `~/.local/bin`. |
 | `GLASSPAD_INSTALLER_DIR` | Where `install.sh` is searched for, when a bundle runs the privileged half. |
 | `GLASSPAD_DOC_ROOT` | Where `LICENSE` and `licenses/THIRD-PARTY-NOTICES.txt` are looked up by the About box. |
+| `GLASSPAD_RUNTIME` | Build-time only. An explicit AppImageKit runtime ELF. **Refused** unless it matches `packaging/runtime-pin.json` — the override that also silenced the check would make the pin decoration. |
+| `GLASSPAD_RUNTIME_DONORS` | Build-time only. Colon-separated `.AppImage` files to borrow a runtime from when the pinned download is unreachable. Default: the usual AppImage directories. |
+| `GLASSPAD_NO_BORROW=1` | Build-time only. Refuse a borrowed tool (see the packaging section). |
+| `GLASSPAD_KEEP_STAGING=1` | Build-time only. Leave the AppDir staged for inspection instead of cleaning it. |
 | `GLASSPAD_UINPUT_NODE` | The node the permission checks look at. Default `/dev/uinput`; it exists so the skip-versus-grant decision in `install.sh` can be tested on a machine whose real `/dev/uinput` is already working. |
 | `GLASSPAD_ENV_HINT` | The hint string printed when the layer-shell library cannot be found. Override only to reword the message; it is a message, not a path. |
 

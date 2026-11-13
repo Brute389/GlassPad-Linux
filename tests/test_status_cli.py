@@ -50,23 +50,41 @@ def test_layer_status_is_about_the_layer_backend():
           and out.find("preload") < out.find("compositor"))
 
 
-def test_layer_status_passes_on_a_working_session():
+def test_layer_status_verdict_follows_the_measured_chain():
     """--status exit code is the machine's verdict, not a formality.
 
-    This asserted exit 0 unconditionally, which was true of the machine it was
-    written on and of exactly one state of that machine. Lock /dev/uinput, or run
-    it on a fresh install, and a green report is a lie: no pad can exist. So the
-    assertion now follows the measured condition, and the failing branch checks the
-    sentence a stranger would act on. Both branches have run for real today, one
-    before the device was locked and one after.
+    This asserted exit 0 unconditionally, which was true of the machine it was written on
+    and of exactly one state of that machine. Lock /dev/uinput, or run it on a fresh
+    install, and a green report is a lie: no pad can exist.
+
+    The second revision still over-assumed. It branched on /dev/uinput alone, so on a
+    machine with a writable device and no compositor -- any headless CI runner, any fresh
+    clone over ssh -- the pad half of the promise held while --status correctly answered
+    nonzero, and the test called that a failure. The verdict is a CHAIN: session, library,
+    compositor, device. A test that models one link of it is asserting its author's laptop
+    is on. So all four conditions are measured here, the expected exit code is derived, and
+    every branch checks the sentence a stranger would act on.
     """
     from glasspad import bundle
     can_pad, why = bundle.uinput_ready()
+    session = bool(os.environ.get("WAYLAND_DISPLAY") or os.environ.get("WAYLAND_SOCKET"))
+    want_zero = can_pad and session
     code, out = run("--backend", "layer", "--status")
+
+    if not session:
+        # There is no compositor to credit or accuse; the only honest statement is that the
+        # missing session is named and the run refuses to look healthy.
+        check(f"no session means nonzero, not a green report (got {code})", code != 0)
+        check("the missing Wayland socket is named",
+              "no Wayland socket" in out or "NOT FOUND" in out)
+        check("and nothing is credited to a compositor that was never asked",
+              "advertises zwlr_layer_shell_v1" not in out)
+        return
+
     check("the compositor is credited with layer-shell",
           "advertises zwlr_layer_shell_v1" in out)
     check("and is not accused of lacking it", "does NOT advertise" not in out)
-    if can_pad:
+    if want_zero:
         check(f"exit 0 where the pad really can be created (got {code})", code == 0)
     else:
         check(f"nonzero when there can be no pad at all ({why[:56]}...)", code != 0)

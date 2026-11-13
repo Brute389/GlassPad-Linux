@@ -22,6 +22,7 @@ here writes outside dist/.
 from __future__ import annotations
 
 import errno
+import glob
 import hashlib
 import json
 import os
@@ -74,9 +75,28 @@ RUNTIME_CACHE = os.path.expanduser("~/.cache/glasspad-build/runtime-x86_64")
 # The donors used before the pin existed. Kept so an offline rebuild is still possible --
 # not as the normal path, because a runtime borrowed from someone else's application is
 # precisely the thing a release ought to be able to name the version of.
-DONORS = ("~/.local/bin/StabilityMatrix.AppImage",
-          "~/.local/bin/tether_x86_64.AppImage",
-          "~/retrodeck/storage/Eden.AppImage")
+DONOR_GLOBS = ("~/.local/bin/*.AppImage", "~/Downloads/*.AppImage",
+               "~/Applications/*.AppImage", "~/*/storage/*.AppImage",
+               "/var/lib/flatpak/exports/bin/*.AppImage")
+
+
+def donor_candidates():
+    """Where to look for a runtime when the pinned download is unreachable.
+
+    This was a hardcoded list of the three applications installed on the maintainer's
+    laptop: accurate here, useless everywhere else, and it published somebody's disk
+    inventory in a public repository. Now it is a rule -- an explicit
+    $GLASSPAD_RUNTIME_DONORS list first, then the directories AppImages actually land in --
+    and every candidate still has to pass extract_runtime(), because plenty of .AppImage
+    files on disk are type-1 or have odd leading bytes.
+    """
+    env = os.environ.get("GLASSPAD_RUNTIME_DONORS")
+    if env:
+        return [os.path.expanduser(p) for p in env.split(os.pathsep) if p]
+    out = []
+    for pat in DONOR_GLOBS:
+        out += sorted(glob.glob(os.path.expanduser(pat)))
+    return out
 
 
 def sha256_of(path: str) -> str:
@@ -181,7 +201,7 @@ def acquire_runtime(dest: str):
         print("  note: could not obtain the pinned runtime; falling back to a local one")
 
     donor, tried = None, []
-    for cand in (os.path.expanduser(c) for c in DONORS):
+    for cand in donor_candidates():
         if not os.path.isfile(cand):
             continue
         try:
