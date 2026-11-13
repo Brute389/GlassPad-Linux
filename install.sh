@@ -10,7 +10,13 @@
 #   ./install.sh --uinput       the privileged half only: module, udev rule,
 #                               group membership. This is what a bundle runs
 #                               (`glasspad --install-uinput`), since it cannot
-#                               carry /etc/udev/rules.d inside itself.
+#                               carry /etc/udev/rules.d inside itself. Skips the
+#                               rule and the group when /dev/uinput is already
+#                               writable for your account -- read the note it
+#                               prints before you reach for --force-rule.
+#   ./install.sh --force-rule   install the udev rule and add the group even where
+#                               access already exists by other means (logind's
+#                               uaccess ACL, Steam's or KDE Connect's rules).
 #   ./install.sh --uninstall-uinput
 #                               the udev rule and the modules-load file only.
 #                               Narrow on purpose: --uninstall also deletes the
@@ -40,6 +46,11 @@ PREFIX="${PREFIX:-/usr/local}"
 SRC=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 MODULES_CONF=/etc/modules-load.d/uinput.conf
 UDEV_RULE=/etc/udev/rules.d/99-glasspad-uinput.rules
+# The node the grant checks look at. Overridable so the skip-versus-grant decision is
+# testable on a machine that already has a working /dev/uinput -- without it, a test can
+# only ever observe whichever branch this one machine happens to be in, and the branch it
+# does not observe is the one that rots.
+UINPUT_NODE="${GLASSPAD_UINPUT_NODE:-/dev/uinput}"
 # The rule lives in its own file, not in a heredoc here, so it can be read and
 # checked on its own (`udevadm verify`) and so the tree holds exactly one copy
 # of the policy.
@@ -104,6 +115,7 @@ autostart_dir() {
 DRY=0
 MODE=install
 USER_ONLY=0
+FORCE_RULE=0
 AUTOSTART=0
 SYSTEM_PREFIX=/usr/local
 for arg in "$@"; do
@@ -117,6 +129,7 @@ for arg in "$@"; do
         --user)      USER_ONLY=1; PREFIX="$(target_home)/.local" ;;
         --autostart) AUTOSTART=1 ;;
         --uinput)    MODE=uinput ;;
+        --force-rule) FORCE_RULE=1 ;;
         --uninstall-uinput) MODE=uinput_remove ;;
         --uninstall) MODE=uninstall ;;
         -h|--help)   # Print the whole header block, however long it is. A fixed
@@ -180,6 +193,21 @@ do_check() {
         say "  udev rule   : $UDEV_RULE present"
     else
         say "  udev rule   : not installed"
+    fi
+    # What a reader is actually asking is not "does the rule file exist" but "can a pad
+    # be created, and because of what". Steam, KDE Connect and logind all hand out the
+    # same node, so "not installed" is routinely the true line on a machine that works
+    # perfectly -- and "present" does not mean it is the thing doing the work.
+    if grant_already_in_place; then
+        say "  grant       : /dev/uinput IS writable for $TARGET_USER"
+        if [ -f "$UDEV_RULE" ]; then
+            say "                (ours is installed; uaccess would do the same on its own)"
+        else
+            say "                (nothing of ours: logind uaccess, or Steam's / KDE"
+            say "                 Connect's rule. No GlassPad rule is needed here.)"
+        fi
+    else
+        say "  grant       : NOT writable for $TARGET_USER -- run --uinput"
     fi
     say ""
     say "groups for $TARGET_USER"
@@ -277,7 +305,39 @@ udev_settle() {
 user_can_write_uinput() {
     # Root can always write the node, so testing as root proves nothing about the
     # account that will actually run GlassPad.
-    su -s /bin/sh "$TARGET_USER" -c 'test -w /dev/uinput' 2>/dev/null
+    su -s /bin/sh "$TARGET_USER" -c "test -w '$UINPUT_NODE'" 2>/dev/null
+}
+
+grant_already_in_place() {
+    # Is /dev/uinput writable for the account that will run GlassPad, BEFORE this
+    # script changes anything? It often already is: logind puts a uaccess ACL on the
+    # node for the active local session, and 60-steam-input.rules and the KDE Connect
+    # rule both tag it `uaccess`. Verified on this machine, where removing our rule
+    # changed nothing at all because those were still there.
+    #
+    # Unprivileged runs -- which includes every --dry-run, since a plan should not
+    # cost a password -- ask for themselves instead, and say so where the answer is
+    # printed. A verdict gathered as the invoking user is not a verdict about the
+    # account a pkexec install would have added to `input`.
+    if [ "$(id -u)" = 0 ] && [ "$TARGET_USER" != root ]; then
+        user_can_write_uinput
+        return $?
+    fi
+    [ -w "$UINPUT_NODE" ]
+}
+
+say_input_group_note() {
+    # The disclosure, said out loud rather than implied by a usermod. `input` is not a
+    # GlassPad-shaped door: it is the group that owns every evdev node on the machine,
+    # so membership can READ every keyboard, mouse and touchpad -- a virtual Xbox pad
+    # is the write half, and the read half comes attached. Anyone granting it should
+    # know that before, not from a forum post afterwards. The honest alternative is
+    # printed right next to this: on many machines nothing at all needs to be granted.
+    say '  what the grant is, plainly: the input group can read every keyboard,'
+    say '  mouse and touchpad on this machine, not just write /dev/uinput. GlassPad'
+    say '  needs the write; group membership is how Linux hands it out, and the read'
+    say '  comes with it. If that is too much for this machine, do not install the'
+    say '  rule -- see the line above about access that already exists.'
 }
 
 install_udev_rule() {
@@ -580,13 +640,55 @@ case "$MODE" in
         fi
         say "uinput access for $TARGET_USER"
         enable_module
-        if ! install_udev_rule; then
-            say ""
-            say "FAILED: no udev rule was installed, so nothing about"
-            say "permissions changed and GlassPad still cannot create a pad."
+        # Checked here, before the decision below, rather than only inside the branch
+        # that writes the rule. A bundle carrying no rule is a truncated download, and
+        # that is worth saying on a machine where nothing happens to need installing
+        # today -- and the refusal is the contract test_install_sh_refuses_when_the_
+        # rule_file_is_gone pins, which runs --uinput on a node that may well already
+        # be writable. The skip path must not swallow a defect report.
+        if [ ! -f "$UDEV_RULE_SRC" ]; then
+            say "  ERROR: rule file not found: $UDEV_RULE_SRC"
+            say "  This script will not fall back to an embedded copy: two versions"
+            say "  of a permission policy is how a machine ends up running the one"
+            say "  nobody reviewed. Restore packaging/glasspad-udev.rules."
             exit 1
         fi
-        add_user_to_input_group
+        # Smallest grant that works, decided rather than assumed. Writing a rule into
+        # /etc and adding the account to `input` is the grant this project used to make
+        # unconditionally, on machines where the node was already writable through
+        # logind's uaccess ACL or Steam's own rule -- leaving behind a permanent /etc
+        # edit and a wide group membership that bought nothing, and that a later
+        # `--uninstall-uinput` could not safely undo because the same policy was
+        # load-bearing for somebody else's package.
+        if [ "$FORCE_RULE" = 1 ]; then
+            say "  --force-rule: granting anyway, whatever already covers the node"
+        fi
+        if [ "$FORCE_RULE" != 1 ] && grant_already_in_place; then
+            if [ "$DRY" = 1 ]; then
+                say "  decision: WOULD NOT install a rule, because the node is already"
+                say "  writable for $(id -un). (A dry run asks as the invoking user, so"
+                say "  on a pkexec run the account tested would be $TARGET_USER.)"
+                say "  --force-rule rehearses the grant path instead, if you want to see"
+                say "  what it would write."
+            else
+                say "  already granted, without GlassPad: /dev/uinput is writable for"
+                say "  $TARGET_USER as things stand, so nothing here changes. No rule"
+                say "  in /etc, no group membership."
+                say "  logind's uaccess ACL, or Steam's / KDE Connect's rules, cover it."
+                say "  If you later remove those and the pad stops working, run this"
+                say "  again with --force-rule."
+            fi
+        else
+            say_input_group_note
+            say ""
+            if ! install_udev_rule; then
+                say ""
+                say "FAILED: no udev rule was installed, so nothing about"
+                say "permissions changed and GlassPad still cannot create a pad."
+                exit 1
+            fi
+            add_user_to_input_group
+        fi
         say ""
         if [ "$DRY" = 1 ]; then
             say "  dry run: nothing changed"

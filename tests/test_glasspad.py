@@ -999,6 +999,76 @@ class TestDocPointers:
         assert self._citable("touch_router.py")
         assert not self._citable("no-such-file-here.md")
 
+    # A path that names its directory. NAMED above refuses anything with a slash on
+    # purpose -- but that also means the README, which is where qualified paths live,
+    # was never checked for existence at all. That is how "`glasspad/layout.py` reads the
+    # Windows layout.json format" sat in the documentation through a release, naming a
+    # module that does not exist: precise-looking, wrong, and invisible to a guard that
+    # only reads bare names.
+    QUALIFIED = re.compile(r"(?<![\w./-])((?:glasspad|tools|tests|licenses|packaging|"
+                           r"desktop)/[A-Za-z0-9_./-]+\.(?:py|sh|md|txt|in|rules|json|"
+                           r"png|svg|desktop))\b")
+    # Removed on purpose and cited as history in the prose that replaced them. Same
+    # reasoning as HISTORICAL, one layer up: the sentence is telling you what used to
+    # exist, and "see git history" is the worse version of that sentence.
+    RETIRED_PATHS = {"tools/make_bundle.py", "tools/verify.sh"}
+
+    def test_qualified_paths_in_the_readme_lead_somewhere(self):
+        readme = (self.ROOT / "README.md").read_text(encoding="utf-8")
+        found = set(self.QUALIFIED.findall(readme))
+        assert len(found) >= 10, f"the scan matched almost nothing: {sorted(found)}"
+        dead = [rel for rel in sorted(found)
+                if rel not in self.RETIRED_PATHS
+                and rel.split("/")[-1] not in self.HISTORICAL
+                and not (self.ROOT / rel).is_file()]
+        assert not dead, [f"README points at {d}" for d in dead]
+
+    def test_the_qualified_scan_is_not_vacuous(self):
+        got = set(self.QUALIFIED.findall(
+            "read glasspad/layer_geom.py, run tools/check_all.py, "
+            "never glasspad/no_such_module.py"))
+        assert got == {"glasspad/layer_geom.py", "tools/check_all.py",
+                       "glasspad/no_such_module.py"}, got
+        assert (self.ROOT / "glasspad/layer_geom.py").is_file()
+        assert not (self.ROOT / "glasspad/no_such_module.py").is_file()
+        # A path inside the bundle is not a path in the tree, and the lookbehind is
+        # what keeps usr/share/glasspad/install.sh from being read as repo prose.
+        assert not self.QUALIFIED.findall("packed at usr/share/glasspad/install.sh")
+
+    ENVVAR = re.compile(r"\bGLASSPAD_[A-Z][A-Z0-9_]*\b")
+
+    def test_every_environment_variable_is_documented(self):
+        """Sixteen variables changed behaviour and none of them were in the README.
+
+        Including GLASSPAD_LOG=full, added specifically so a bug report could ask for
+        unfolded telemetry -- which is not something you can ask for if the only place
+        it exists is a source file. The guard is the cheap half; the table is the work.
+        """
+        names = set()
+        for path in sorted((self.ROOT / "glasspad").glob("*.py")):
+            names.update(self.ENVVAR.findall(path.read_text(encoding="utf-8")))
+        assert len(names) >= 15, f"suspiciously few variables found: {sorted(names)}"
+        readme = (self.ROOT / "README.md").read_text(encoding="utf-8")
+        missing = sorted(n for n in names if n not in readme)
+        assert not missing, [f"{n} changes behaviour and is not in README.md"
+                             for n in missing]
+
+    def test_the_troubleshooting_section_answers_the_symptoms_we_actually_hit(self):
+        """Every entry earned its place on a real machine, in this project's history.
+
+        Not a generic FAQ: each line is a thing that happened here and cost time --
+        access that exists but was not granted (the pad that draws and does nothing),
+        exclusive fullscreen taking the screen from the compositor, KDE caching a pixmap
+        by name, a group that only applies at the next login. If a future change deletes
+        one of these paths, this fails and says which sentence went stale.
+        """
+        readme = (self.ROOT / "README.md").read_text(encoding="utf-8")
+        assert "## Troubleshooting" in readme, "the section is gone"
+        body = readme.split("## Troubleshooting", 1)[1].split("\n## ", 1)[0].lower()
+        for needle in ("--status", "--selftest", "plasmashell", "glasspad_log=full",
+                       "exclusive", "log out", "zwlr_layer_shell_v1"):
+            assert needle in body, f"troubleshooting no longer mentions {needle!r}"
+
     def test_the_scanned_files_are_actually_readable(self):
         # Same reason: if the glob ever matches nothing, every other assertion
         # here is silently satisfied by an empty scan.

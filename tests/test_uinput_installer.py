@@ -182,6 +182,81 @@ def test_install_sh_uinput_mode_is_documented_and_parses():
     check("dry run changes nothing", "dry run: nothing changed" in r.stdout)
 
 
+def _grant_run(tmp, node, extra=()):
+    """install.sh --uinput --dry-run against a chosen node, nothing written.
+
+    GLASSPAD_UINPUT_NODE is why this is possible: without it the decision reads the real
+    /dev/uinput, so a test could only ever observe whichever branch the machine running
+    it happens to be in -- and the branch nobody observes is the one that rots.
+    """
+    env = dict(os.environ, GLASSPAD_UINPUT_NODE=node, HOME=tmp)
+    return sh(["sh", os.path.join(ROOT, "install.sh"), "--uinput", "--dry-run", *extra],
+              cwd=ROOT, env=env)
+
+
+def test_the_grant_is_the_smallest_one_that_works():
+    """Access that already exists is not granted again.
+
+    logind puts a uaccess ACL on /dev/uinput for the active session, and
+    60-steam-input.rules and the KDE Connect rule tag it the same way -- verified here,
+    where deleting our rule changed nothing. So an unconditional install left a
+    permanent /etc edit plus `input` membership on machines that needed neither, and
+    `--uninstall-uinput` could not safely take the rule back, because the same policy was
+    load-bearing for someone else's package.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        node = os.path.join(tmp, "writable")
+        open(node, "wb").close()
+        os.chmod(node, 0o600)
+
+        r = _grant_run(tmp, node)
+        out = r.stdout + r.stderr
+        check(f"writable node: declines to touch /etc (exit {r.returncode})",
+              r.returncode == 0 and "WOULD NOT install a rule" in out)
+        check("writable node: no rule write, no usermod",
+              "would copy" not in out and "usermod" not in out)
+        check("and it names the way back for a machine that loses that access",
+              "--force-rule" in out)
+
+        gone = _grant_run(tmp, os.path.join(tmp, "absent"))
+        gout = gone.stdout + gone.stderr
+        check("unwritable node: takes the grant path",
+              "WOULD NOT install a rule" not in gout and "would copy" in gout)
+        check("grant path: writes the ONE rule file, not an embedded copy",
+              "packaging/glasspad-udev.rules" in gout)
+
+        forced = _grant_run(tmp, node, ["--force-rule"])
+        fout = forced.stdout + forced.stderr
+        check("--force-rule grants anyway, and says it is doing so",
+              "--force-rule: granting anyway" in fout and "would copy" in fout)
+
+
+def test_the_input_group_disclosure_is_printed_where_it_is_decided():
+    """`input` is the group that owns every evdev node: membership READS every keyboard,
+    mouse and touchpad on the machine. The write on /dev/uinput that GlassPad needs is
+    the narrow part; the read comes attached, and it is a permanent capability that
+    outlives the app.
+
+    This belongs in the installer's own output rather than only in a README nobody reads
+    at the moment of decision -- the moment of decision is when a password is being typed.
+    And it is said before the change, not after it.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        r = _grant_run(tmp, os.path.join(tmp, "absent"))
+        out = (r.stdout + r.stderr).lower()
+        check("says the group can read every keyboard",
+              "read every keyboard" in out)
+        check("says it covers mouse and touchpad too",
+              "touchpad" in out)
+        check("and offers the narrower answer instead of only the wide one",
+              "do not install the" in out or "already exists" in out)
+        # The flag's own help text carries it too, since that is what a reader of
+        # `glasspad --help` sees before anything runs.
+        h = sh([sys.executable, "-m", "glasspad", "--help"], cwd=ROOT)
+        hout = (h.stdout + h.stderr).lower()
+        check("--help carries the same warning", "read every keyboard" in hout)
+
+
 def test_invoking_user_comes_from_pkexec_uid():
     """pkexec sets only PKEXEC_UID; without this the wrong account joins `input`.
 

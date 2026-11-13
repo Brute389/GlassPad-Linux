@@ -22,6 +22,10 @@ Special modes -- none of them need a Wayland session running:
                     writable. Without that access the controls draw, animate,
                     and reach no game whatsoever, which is the most confusing
                     failure this program can have.
+                    `input` membership can READ every keyboard and touchpad on the
+                    machine, so it is skipped when the node is already writable for
+                    you -- which it often is, via logind or Steam's own rule. Add
+                    --force-rule to grant it regardless.
   --uninstall-uinput  remove the udev rule and modules-load file this program
                     installed. Does NOT touch your layout, your desktop entry,
                     or the input group -- those are yours to decide about.
@@ -579,6 +583,14 @@ def install_uinput(argv: list[str] = ()) -> int:
     print("    /etc/modules-load.d/uinput.conf    load the uinput module at boot")
     print("    /etc/udev/rules.d/99-glasspad-...  hand /dev/uinput to group input")
     print("    group `input`                      your account is added to it")
+    # Said before the prompt, not after the change. `input` owns every evdev node, so
+    # membership reads every keyboard and touchpad on the machine; the write on
+    # /dev/uinput is the part GlassPad needs and the read is attached to it. A grant
+    # this wide should be understood going in -- and the installer may not even make
+    # it, because it skips both when the node is already writable for you.
+    print("Note: `input` membership can also READ every keyboard, mouse and touchpad")
+    print("on this machine. That is wider than this app needs; the installer skips the")
+    print("rule and the group entirely if /dev/uinput is already writable for you.")
     print()
     print("The exact rule being installed is this file, which you can read first:")
     print(f"    {rule}")
@@ -613,6 +625,12 @@ def install_uinput(argv: list[str] = ()) -> int:
         cmd = (["sh"] if dry else [tool, "sh"]) + [staged, "--uinput"]
         if dry:
             cmd.append("--dry-run")
+        if "--force-rule" in argv:
+            # Passed through rather than honoured here, because the decision lives in
+            # one place: install.sh decides whether a rule is needed, and --status
+            # reads the same verdict. A flag this file swallowed would be a flag the
+            # help advertises and the install ignores.
+            cmd.append("--force-rule")
         # Flush before spawning: install.sh writes straight to the same fd, and when
         # stdout is a pipe or a file the parent block-buffers -- so a logged run reads
         # as though the installer had already run and only then been explained. In a

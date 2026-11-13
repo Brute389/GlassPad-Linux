@@ -358,7 +358,7 @@ Three commands, in order of how much they cost:
 ```bash
 python3 -m glasspad --status      # this machine: library, compositor, /dev/uinput, profiles
 ./install.sh --check              # uinput module, group, udev rule, desktop entry
-python3 tools/check_all.py        # the whole suite: 21 suites, ~19 s
+python3 tools/check_all.py        # the whole suite: 26 suites, ~35 s
 ```
 
 `install.sh --check` changes nothing; it is the "why is there no overlay on screen"
@@ -371,10 +371,95 @@ a grep for `ABS_HAT0X` matches whether it is `0x10` (a hat) or `0x39`
 (`ABS_MT_TRACKING_ID`). `TestXbox360Abi` in `tests/test_glasspad.py` asserts the numbers
 against the kernel headers.
 
+## Troubleshooting
+
+Start with the two commands that were written for this. Both print a verdict, both are
+safe on a live machine, and together they cover most of what can be wrong:
+
+```bash
+glasspad --status       # library, compositor, /dev/uinput, who grants it, menu entry
+glasspad --selftest     # 95 checks: geometry, mapping, ABI numbers, teardown, licences
+```
+
+If you are reporting a problem, paste both in full. A symptom without them is a
+conversation that starts with "and what does `--status` say".
+
+| What you see | What it is |
+| --- | --- |
+| Controls draw, animate, and nothing happens in the game | No `/dev/uinput` write access. `--status` says so. Run `glasspad --install-uinput`, then **log out and back in** — a process keeps the groups it started with, and no `udevadm trigger` fixes that. This is the most confusing failure this program has, because everything on screen looks correct. |
+| Overlay appears on the desktop but vanishes in a game | The game has an **exclusive fullscreen** grab, which takes the screen from the compositor, and a layer surface lives in the compositor. Run the game in borderless/windowed fullscreen. |
+| No overlay at all, and `--status` mentions `zwlr_layer_shell_v1` | Your compositor does not offer layer-shell. Stock GNOME is the usual one; KWin, Hyprland, Sway and wlroots do. |
+| No overlay, and the library was not found | `libgtk4-layer-shell` is not installed, or is a different GTK 4 minor than the one linked. `--status` names the package for your distro; it is the line to trust over any table in a README. |
+| Menu shows an old icon after a reinstall | The artwork changed but the version did not, so the integrated icon **name** did not — and KDE caches rendered pixmaps by name inside `plasmashell`, for the life of the process. The files on disk are right; restart the shell: `systemctl --user restart plasma-plasmashell.service`. Bump the version on artwork changes and the name changes with it. |
+| Second Ctrl-C kills it outright | Intended. The first requests an orderly shutdown (release every button, destroy the pad); the second exits hard, because `os._exit` drops the last `/dev/uinput` fd and the kernel closes the device. No ghost pad is left either way. |
+| A control stays pressed after you let go | Should not happen — the watchdog releases anything held past `--hold-limit`, and a release caused by the watchdog or a hide is not undone by later drag events. If you can reproduce it, capture with `GLASSPAD_LOG=full` (below) and attach `--status`. |
+| Buttons respond to taps but the stick feels wrong | Check `--saturate`, `--stick-curve`, `--deadzone` — the parity target is the Windows client's `MaxTravel`, not the drawn radius, so a stick that visually bottoms out early is correct behaviour. |
+
+### Journal and terminal noise
+
+A manager-launched run (AppImage Menu, systemd transient unit) has no terminal, so
+stdout is the journal and the journal is the only record the run leaves. Per-control
+position and size readouts are therefore folded to one line per control per half second,
+and the line says what it stands for:
+
+```
+status: A  125x125
+status: A  212x212  (+2 updates folded)
+```
+
+One-shot messages — profile switches, refusals, why something did *not* happen — are
+never folded. To see every event while debugging:
+
+```bash
+GLASSPAD_LOG=full glasspad          # or: journalctl --user -f
+```
+
+## Environment variables
+
+Every one the code reads. The `--help` flags are the supported interface; these are the
+same settings for cases where a flag cannot reach — a launcher, a manager, a service.
+
+**Support**
+
+| | |
+| --- | --- |
+| `GLASSPAD_LOG=full` | Stop folding the streaming status readouts (see above). |
+| `GLASSPAD_CONFIG_DIR` | Where `layout.json` and `profiles/` live. Default `~/.config/GlassPad`; `--status` prints the resolved path. |
+| `GLASSPAD_SELFTEST=1` | Run the 95-check selftest instead of an ordinary session. `glasspad --selftest` sets this and adds `--null-pad`. |
+| `GLASSPAD_DEBUG` | Extra diagnostics on stderr at a few decision points (library resolution, teardown). |
+| `GLASSPAD_TRACE` | Per-event trace, same as `--trace`: every touch, grab, release, fold. Loud; meant for one reproduce. |
+
+**Behaviour**
+
+| | |
+| --- | --- |
+| `GLASSPAD_HOLD_LIMIT` | Default for `--hold-limit`, the watchdog ceiling in seconds. Clamped like the flag. |
+| `GLASSPAD_TERMINAL` | Which terminal to open when a privileged step needs a window (an AppImage launched from a menu has none). Validated against the known names; unknown values are refused rather than exec'd. |
+| `GLASSPAD_DPAD_STYLE` | Default for `--dpad-style`. |
+| `GLASSPAD_DPAD_CROSS` | Default for `--dpad-cross`. |
+| `GLASSPAD_DPAD_PRESS` | Default for `--dpad-press`. |
+| `GLASSPAD_PRESS` | Default for `--press`. |
+| `GLASSPAD_BACKEND` | Backend selection. An unrecognised value is refused with the valid names, exactly like `--backend` — it cannot silently fall through into starting an overlay. |
+
+**Internals — you should not need any of these**
+
+They exist because a bundle's layout is only known at runtime, and the tests import the
+packed copies rather than the checkout.
+
+| | |
+| --- | --- |
+| `GLASSPAD_LAYER_SHELL` | Absolute path to `libgtk4-layer-shell.so.0`, for a library the loader cannot find. `--status` prints this exact hint when it is the missing piece. |
+| `GLASSPAD_BUNDLE`, `GLASSPAD_BUNDLE_LIB` | Bundle root markers set by the launcher. `APPDIR` is honoured as well. |
+| `GLASSPAD_BIN_DIR` | Where the `glasspad` command on `PATH` is created. Default `~/.local/bin`. |
+| `GLASSPAD_INSTALLER_DIR` | Where `install.sh` is searched for, when a bundle runs the privileged half. |
+| `GLASSPAD_DOC_ROOT` | Where `LICENSE` and `licenses/THIRD-PARTY-NOTICES.txt` are looked up by the About box. |
+| `GLASSPAD_UINPUT_NODE` | The node the permission checks look at. Default `/dev/uinput`; it exists so the skip-versus-grant decision in `install.sh` can be tested on a machine whose real `/dev/uinput` is already working. |
+| `GLASSPAD_ENV_HINT` | The hint string printed when the layer-shell library cannot be found. Override only to reword the message; it is a message, not a path. |
+
 ## Tests
 
 ```bash
-python3 tools/check_all.py                        # everything, ~28 s
+python3 tools/check_all.py                        # everything, ~35 s
 python3 tools/run_tests.py                        # the pytest-style suite on its own
 python3 tools/check_all.py --no-legacy --no-live  # quick loop while editing
 ```
@@ -392,9 +477,9 @@ Current tallies here:
 
 | piece | tally |
 | --- | --- |
-| stdlib suites | **217 passed** |
-| pytest-style suite, via `tools/run_tests.py` | **87 passed, 0 skipped** |
-| in-app self-test (`GLASSPAD_SELFTEST`: real hub, resize, rotation, profiles, turbo, licence reader) | **92 checks** |
+| stdlib suites (24 files) | **297 passed** |
+| pytest-style suite, via `tools/run_tests.py` | **91 passed, 0 skipped** |
+| in-app self-test (`GLASSPAD_SELFTEST`: real hub, resize, rotation, profiles, turbo, licence reader) | **95 checks** |
 
 Those numbers are what `tools/check_all.py` prints on this machine, not an assertion — no
 test compares the README to the runner, because a pin that has to be edited every time a
@@ -1006,7 +1091,7 @@ cat /dev/input/js0 | head -c 64 | xxd | head    # or: python3 -m evdev.evtest
 
 ## Layouts
 
-`glasspad/layout.py` reads the Windows `layout.json` format as-is. The file
+`glasspad/layer_geom.py` reads the Windows `layout.json` format as-is. The file
 holds only geometry, as an ordered array with **no names**, matched positionally
 against `all_editable` (all 13 buttons first, then dpad and sticks -- the C#
 original concatenates two lists, so flattened index order differs from build
