@@ -1994,6 +1994,18 @@ class Overlay:
         box.append(self.status_label)
         box.append(self._row(self._pill("Open-source licenses", "grey",
                                         self._open_licenses, 200, 34)))
+        # Only when there is no pad. Drag-and-drop installs -- an AppImage manager like
+        # Shelly, or an icon -- have no terminal behind them, and the one step that
+        # needs a password is the one that needs to be READ: which udev rule is about to
+        # be written, and what the verdict was. Telling that user to "run glasspad
+        # --install-uinput" is a note on a door with no handle, so the box opens the
+        # window instead. It does not escalate anything: the terminal runs our own
+        # command, and the password prompt stays inside pkexec where it can be refused.
+        self.grant_pill = None
+        if getattr(self.service, "fell_back_to_null", False):
+            self.grant_pill = self._pill("Grant gamepad access", "",
+                                         self._grant_access, 200, 34)
+            box.append(self._row(self.grant_pill))
         box.append(self._row(self._pill("Close", "grey", self._close_info, 120, 34)))
 
         self.info.set_child(box)
@@ -2014,6 +2026,30 @@ class Overlay:
 
         self.confirm.set_child(box)
         self.windows.append(self.confirm)
+
+    def _grant_access(self) -> None:
+        """Put a terminal on screen running our own --install-uinput.
+
+        See glasspad/terminal.py for why a window rather than a toast: the installer's
+        plan, the polkit prompt and the final verdict are the things a user needs in
+        front of them, and the same output is what a bug report quotes. Failures here
+        are reported on screen AND on stderr, because "no terminal found" printed only
+        to a stdout nobody can see is how this feature would have looked broken.
+        """
+        from glasspad import bundle, terminal
+
+        tgt = bundle.cli_target()
+        if not tgt:
+            self._say("cannot tell what to run \u2014 start GlassPad from the AppImage")
+            return
+        argv, cwd, env_extra = terminal.install_command(tgt[0], tgt[1],
+                                                       ["--install-uinput"])
+        ok, note = terminal.open_command_window(argv, cwd=cwd, env_extra=env_extra)
+        print(f"[grant] {note}", file=sys.stderr, flush=True)
+        if ok:
+            self._say("terminal opened \u2014 approve the password prompt there")
+        else:
+            self._say("no terminal found \u2014 see the command on stderr")
 
     def _open_info(self) -> None:
         self._close_fab()                     # window.py does exactly this first
@@ -2758,6 +2794,40 @@ class Overlay:
             self._set_edit(False)
             return False
 
+        def step_grant_route():
+            """The About box is the ONLY route to a pad for a drag-and-drop install.
+
+            Somebody who installed by dropping the AppImage onto Shelly has no terminal
+            and no command line. The null-pad notice tells them to run
+            `--install-uinput`, which is a sentence about a place they are not standing.
+            So this checks the button is there, wired to the thing that opens a window --
+            not to a toast claiming a grant that did not happen.
+            """
+            # --null-pad is a DELIBERATE choice, so it does not set fell_back_to_null --
+            # that flag means "we tried the real pad and the machine said no", which is
+            # the only state where the button earns its place on the box. So the check
+            # creates the state the report describes, and rebuilds the panel that was
+            # built from the honest one.
+            self.service.fell_back_to_null = True
+            stale, self.info = self.info, None
+            self._build_info_panel()
+            if stale is not None:
+                try:                        # cleanup only: it may already be gone
+                    self.windows.remove(stale)
+                    stale.destroy()
+                except Exception:           # noqa: BLE001 - a leaked panel is not a failure
+                    pass
+            self._open_info()
+            check("About box is shown", self.info is not None
+                  and bool(self.info.get_mapped()))
+            check("offers to grant gamepad access while there is no pad",
+                  getattr(self, "grant_pill", None) is not None)
+            _docs, problems = self._licence_documents()
+            check("the licence documents in this build still resolve", not problems)
+            self._close_info()
+            self.service.fell_back_to_null = False
+            return False
+
         def step_quit():
             self._quit_request()
             check("quit ends the session", not self.loop.is_running())
@@ -2773,6 +2843,7 @@ class Overlay:
                  step_watchdog_arm, step_watchdog_fire,
                  step_ghost_arm, step_ghost_after,
                  step_turbo_arm, step_turbo_fired, step_turbo_released,
+                 step_grant_route,
                  step_disable_off,
                  step_disable_on, step_edit_off_via_confirm, step_info, step_licence, step_dpad, step_profile_setup, step_profile_switch,
                  step_profile_defer, step_profile_cycle, step_live_geom, step_hide_fence, step_edge_gate, step_stick, step_stick_ui, step_quit_guard,

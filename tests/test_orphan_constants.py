@@ -174,6 +174,46 @@ def test_the_detector_actually_detects():
         assert declared_constants(broken) == []
 
 
+def test_no_nested_def_shadows_another():
+    """Two `def step_info()` in one body: the second wins, and the first set of checks
+    stops running while still being listed in the chain.
+
+    Caught live. A new selftest step reused the name of an existing one; both names were
+    still in `chain = [...]`, so the run looked like it had one more step than it did.
+    In reality one step ran twice and two checks -- "about box opens", "Close dismisses
+    it" -- had been deleted from the run without a line disappearing from the file. A
+    suite that loses checks silently is worse than a smaller suite: the tally keeps
+    looking reassuring.
+
+    Nested `def` inside a function is this project's own idiom (the selftest chain, the
+    animation steppers), which is exactly the shape a lint-free repo grows this in.
+    """
+    bad = []
+    for path in python_files():
+        if ROOT / "glasspad" not in path.parents:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
+        for outer in ast.walk(tree):
+            if not isinstance(outer, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            seen: dict[str, int] = {}
+            for stmt in outer.body:
+                if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if stmt.name in seen:
+                    bad.append(f"{path.relative_to(ROOT)}: {outer.name}.{stmt.name} "
+                               f"defined again at line {stmt.lineno} "
+                               f"(first at {seen[stmt.name]})")
+                else:
+                    seen[stmt.name] = stmt.lineno
+    assert not bad, (
+        "a nested def shadows an earlier one, so the earlier body never runs:\n  "
+        + "\n  ".join(bad)
+        + "\n\nRename the new one. The old name may still be referenced elsewhere "
+          "(selftest chains are lists of closures), and that is precisely how checks "
+          "vanish from a run while the file still looks complete.")
+
+
 if __name__ == "__main__":
     fails = 0
     ran = 0

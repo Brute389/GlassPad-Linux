@@ -471,6 +471,13 @@ def _is_our_command(path: str, target: tuple[str, str]) -> bool:
     script carrying our marker line for the tree being run from. Everything else -- a
     distribution package, another build, a stale link left behind -- is not ours to
     suggest (cli_hint) and not ours to put in Exec= (desktop_entry.launch_target).
+
+    A DANGLING symlink is the case that used to be misread. An AppImage manager (Shelly
+    and friends) MOVES the file it installs, so a link we wrote points at a path that
+    stops existing -- and neither realpath comparison matches, nor can the file be read.
+    It came out as "refused: something else owns it", which is both wrong and
+    unfollowable, because the thing that owns it is us. cli_link_state() handles that
+    shape explicitly.
     """
     try:
         if os.path.realpath(path) == os.path.realpath(target[1]):
@@ -518,6 +525,43 @@ def cli_bin_dir() -> str:
     return os.path.join(os.path.expanduser("~"), ".local", "bin")
 
 
+def cli_link_state() -> tuple[str, str]:
+    """("ok"|"dangling"|"foreign"|"absent", detail) for the `glasspad` command.
+
+    Existence is not the question anybody asks. The question is whether the thing the
+    messages tell them to type will run -- and a link left dangling by a manager that
+    moved the AppImage LOOKS installed (`ls` shows it, PATH finds it) while every
+    invocation answers "No such file or directory". So `--status` reports this rather
+    than "command installed: yes".
+    """
+    dest = os.path.join(cli_bin_dir(), CLI_NAME)
+    if not os.path.lexists(dest):
+        return "absent", dest
+    if os.path.islink(dest):
+        target = os.readlink(dest)
+        if not os.path.exists(dest):
+            return "dangling", f"{dest} -> {target}"
+        return ("ok", dest) if os.access(dest, os.X_OK) else ("foreign", f"{dest} (not executable)")
+    if os.access(dest, os.X_OK):
+        return "ok", dest
+    return "foreign", f"{dest} (not executable)"
+
+
+def _ours_by_name(path: str) -> bool:
+    """Does this link/wrapper look like it was written for a GlassPad of ours?
+
+    Deliberately name-based, and only used for a link we cannot resolve: there is no
+    marker to read inside a dangling symlink, and the alternative -- refusing to touch
+    a broken link that says `glasspad` -- leaves the user with a command that cannot
+    run and a program that won't fix it.
+    """
+    try:
+        base = os.path.basename(os.readlink(path) if os.path.islink(path) else path)
+    except OSError:
+        return False
+    return base.lower().startswith(CLI_NAME)
+
+
 def install_cli_link(dry: bool = False, force: bool = False) -> int:
     """Make `glasspad` a real command for this user, pointing at THIS install.
 
@@ -552,7 +596,17 @@ def install_cli_link(dry: bool = False, force: bool = False) -> int:
         if _is_our_command(dest, tgt):
             print(f"  `glasspad` already points here: {dest}")
             return 0
-        if not force:
+        broken = (os.path.islink(dest) and not os.path.exists(dest)
+                  and _ours_by_name(dest))
+        if broken:
+            # Ours, broken by a move -- not a stranger to be polite about. An AppImage
+            # manager relocates the file it installs, the link we wrote then points at
+            # nothing, and every invocation answers "No such file or directory" while
+            # `ls` still lists the command as installed.
+            old_target = os.readlink(dest)
+            print(f"  the existing `glasspad` link is broken: {dest} -> {old_target}")
+            print("  that file no longer exists (a manager moved it). Re-pointing it.")
+        elif not force:
             print(f"  refused: something else owns {dest}")
             try:
                 real = os.path.realpath(dest)
@@ -562,14 +616,15 @@ def install_cli_link(dry: bool = False, force: bool = False) -> int:
             print("  Not replacing it. If that is the file you want gone, remove it and")
             print("  re-run, or pass --force.")
             return 1
-        # Asked for explicitly, so do it visibly: name the file, and say where its old
-        # target went. A silently overwritten command is how a distribution package
-        # disappears off PATH with nothing to point at afterwards.
-        try:
+        else:
+            # Asked for explicitly, so do it visibly: name the file and its old target.
+            # A silently overwritten command is how a distribution package disappears
+            # off PATH with nothing left to point at.
             print(f"  --force: replacing {dest}")
-            print(f"           (was: {os.path.realpath(dest)})")
-        except OSError:
-            pass
+            try:
+                print(f"           (was: {os.path.realpath(dest)})")
+            except OSError:
+                pass
         try:
             os.unlink(dest)
         except OSError as exc:

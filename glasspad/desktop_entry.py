@@ -187,42 +187,65 @@ Exec="{status}"
 """
 
 
-def install_desktop(dry: bool = False, force: bool = False) -> int:
-    """Write the menu entry and the icon into the user's own directories.
+def applications_dirs() -> list[str]:
+    """Where a menu entry might live, in the order the desktop would read them."""
+    dirs = [os.path.join(data_home(), "applications")]
+    for d in (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":"):
+        if d:
+            dirs.append(os.path.join(d, "applications"))
+    return dirs
 
-    Never needs root, never writes outside $XDG_DATA_HOME, and prints every path
-    it touched so the user can undo it by hand from the terminal alone.
+
+def foreign_entries_for(target: str) -> list[tuple[str, str]]:
+    """Entries that already launch THIS file but were not written by us.
+
+    An AppImage manager (Shelly, AppImageLauncher, Discover's AppImage backend) writes
+    its own .desktop when it installs an AppImage, and it owns the file's location from
+    then on -- it is the thing that moves, updates and removes the file. A second entry
+    written by us means two menu items for one application, only one of which the
+    manager keeps current, and the moment it relocates the file ours launches nothing.
+    That is not a cosmetic duplicate: a menu item that fails reads as a broken app.
+
+    Matching is on the resolved Exec path, not the app name, so another GlassPad build
+    does not count as "this file", and our own filename is skipped outright.
     """
-    target, why = launch_target()
-    if not target:
-        print(f"Cannot install a menu entry: {why}.")
-        print("Run this from inside the AppImage, or from a source checkout.")
-        return 2
+    if not target or " " in target and not os.path.exists(target):
+        return []            # e.g. "python3 -m glasspad": nothing for a manager to own
+    want = os.path.realpath(target)
+    mine = (DESKTOP_NAME,) + LEGACY_NAMES
+    out: list[tuple[str, str]] = []
+    for d in applications_dirs():
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for n in names:
+            if not n.endswith(".desktop") or n in mine:
+                continue
+            path = os.path.join(d, n)
+            try:
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    body = fh.read(8192)
+            except OSError:
+                continue
+            for ln in body.splitlines():
+                if not ln.startswith("Exec="):
+                    continue
+                val = ln[5:].strip().strip('"')
+                if val and os.path.realpath(val) == want:
+                    label = n
+                    for ln2 in body.splitlines():
+                        if ln2.startswith("Name=") and len(ln2) > 5:
+                            label = ln2[5:].strip()
+                            break
+                    out.append((path, label))
+                    break
+    return out
 
-    base = data_home()
-    apps = os.path.join(base, "applications")
-    icon = icon_source()
-    icon_dest = None
-    if icon:
-        kind = "scalable" if icon.endswith(".svg") else ("512x512" if "512" in icon else "256x256")
-        ext = ".svg" if icon.endswith(".svg") else ".png"
-        icon_dest = os.path.join(base, "icons", "hicolor", kind, "apps", ICON_NAME + ext)
 
-    dest = os.path.join(apps, DESKTOP_NAME)
-    if dry:
-        print(f"would write {dest}")
-        if icon_dest:
-            print(f"would copy {icon} -> {icon_dest}")
-        print(f"launch target: {target}  ({why})")
-        # The rehearsal has to rehearse all of it: a --dry-run that quietly
-        # omits the command line is how you discover the difference on the real
-        # run, which is the one that has a password prompt in it.
-        from glasspad import bundle
-        print()
-        bundle.install_cli_link(dry=True, force=force)
-
-        return 0
-
+def _write_entry_and_icon(target: str, why: str, base: str, apps: str,
+                     dest: str, icon: str | None, icon_dest: str | None) -> None:
+    """The menu entry, its icon, and a cache refreshed only if one exists."""
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.dirname(here)
     workdir = root if " -m glasspad" in target and os.path.isfile(
@@ -268,6 +291,60 @@ def install_desktop(dry: bool = False, force: bool = False) -> int:
             pass
 
     print("the entry appears on the next menu refresh; log out and in if it does not.")
+
+
+def install_desktop(dry: bool = False, force: bool = False) -> int:
+    """Write the menu entry and the icon into the user's own directories.
+
+    Never needs root, never writes outside $XDG_DATA_HOME, and prints every path
+    it touched so the user can undo it by hand from the terminal alone.
+    """
+    target, why = launch_target()
+    if not target:
+        print(f"Cannot install a menu entry: {why}.")
+        print("Run this from inside the AppImage, or from a source checkout.")
+        return 2
+
+    base = data_home()
+    apps = os.path.join(base, "applications")
+    icon = icon_source()
+    icon_dest = None
+    if icon:
+        kind = "scalable" if icon.endswith(".svg") else ("512x512" if "512" in icon else "256x256")
+        ext = ".svg" if icon.endswith(".svg") else ".png"
+        icon_dest = os.path.join(base, "icons", "hicolor", kind, "apps", ICON_NAME + ext)
+
+    dest = os.path.join(apps, DESKTOP_NAME)
+    if dry:
+        print(f"would write {dest}")
+        if icon_dest:
+            print(f"would copy {icon} -> {icon_dest}")
+        print(f"launch target: {target}  ({why})")
+        foreign = foreign_entries_for(target)
+        if foreign:
+            print(f"note: {len(foreign)} existing entry/entries already launch this file"
+                  f" ({foreign[0][0]}) -- a real run would not add another")
+        # The rehearsal has to rehearse all of it: a --dry-run that quietly
+        # omits the command line is how you discover the difference on the real
+        # run, which is the one that has a password prompt in it.
+        from glasspad import bundle
+        print()
+        bundle.install_cli_link(dry=True, force=force)
+
+        return 0
+
+    foreign = foreign_entries_for(target)
+    if foreign and not force:
+        print("A menu entry that launches this exact file already exists, written by")
+        print("something else -- an AppImage manager integrates the files it installs:")
+        for path, label in foreign:
+            print(f"    {label:<26} {path}")
+        print("Not writing a second one. Two entries for one application is how a")
+        print("manager's later move leaves a stale item pointing at a file that is gone,")
+        print("and only the manager's entry knows where the file went. Pass --force to")
+        print("write ours as well.")
+    else:
+        _write_entry_and_icon(target, why, base, apps, dest, icon, icon_dest)
 
     # The menu entry makes the app clickable. The command makes it fixable:
     # every diagnostic this program prints is imperative -- run this, confirm

@@ -142,6 +142,67 @@ python3 -m glasspad --status   # environment + backend report
 python3 -m glasspad --null-pad # UI only, no virtual device
 ```
 
+### Two ways in: run the file, or drop it on a manager
+
+There are two legitimate first-run routes and the installer has to behave in both,
+because they leave different things behind.
+
+**Run it.** `./GlassPad-1.1.0-x86_64.AppImage --install` does the whole job: checks the
+library, grants `/dev/uinput` (one password prompt), writes the menu entry, the icon and
+the `glasspad` command. Everything it prints is copy-pasteable, because you are in a
+terminal.
+
+**Drop it on a manager** — Shelly on CachyOS, AppImageLauncher, Discover's AppImage
+backend. This is a *better* install for parts of the job and it does not overlap with the
+part that matters most:
+
+| | a manager | `--install` |
+|---|---|---|
+| moves the file somewhere sensible | yes | no (it installs from wherever it is) |
+| menu entry, icon, caches | yes, its own | yes, ours |
+| updates the entry when the file moves | yes | no |
+| `/dev/uinput` — a udev rule and group membership | **no** | yes |
+| `glasspad` on PATH | no | yes |
+
+Checked rather than assumed: no udev/group strings in Shelly's binary, and it has no
+appstream/update URL to consult, so it cannot deliver a gamepad permission it has no code
+for. What it *can* do — moving the file — is the one thing that breaks things quietly, so
+three behaviours exist for it:
+
+**A menu entry that already launches your file is not duplicated.** `--install-desktop`
+scans the applications dirs for an `Exec=` that resolves to the same file. If one exists
+it prints which file and stands down, because two menu items for one application means
+one of them goes stale the next time the manager moves the file — and a menu item that
+fails reads as a broken app. The `glasspad` command is still installed, because no
+manager writes that and every diagnostic in this program is a sentence starting with
+`glasspad …`. `--force` writes ours anyway.
+
+**A `glasspad` command left dangling by a move is recognised as ours and repaired.** An
+AppImage manager relocates the file; the symlink we wrote then points at nothing, and
+neither the realpath comparison nor the marker-in-file test can prove ownership of a file
+that does not exist. Until this existed the message was *"refused: something else owns
+it"* about our own link. `--status` now reports the state as its own line:
+
+```
+glasspad cmd    : BROKEN: /home/josh/.local/bin/glasspad -> /old/GlassPad-1.1.0… — that
+                  file is gone (a manager moved it?). Re-point with:  --install-desktop
+menu entry      : 1 from another launcher: ~/.local/share/applications/appimage-GlassPad.desktop
+```
+
+**The privileged step is reachable with no terminal.** Drop a file on a manager, get a
+menu icon, and there is no terminal anywhere: stdout goes nowhere, and *"run
+`glasspad --install-uinput`"* is a note on a door with no handle. So when there is no pad
+the About box carries a **Grant gamepad access** button. It opens a terminal window
+running our own `--install-uinput` — the plan, the polkit prompt, the installer's output,
+and the exit code, with the window held open so the verdict can actually be read
+(`glasspad/terminal.py`; konsole, gnome-terminal, kitty, alacritty, foot, wezterm,
+xfce4-terminal, xterm, overridable with `$GLASSPAD_TERMINAL`). It escalates nothing
+itself: the password prompt stays inside `pkexec`, where it can be refused. If no
+terminal is installed, the toast says so and prints the exact command on stderr.
+
+What a manager user still has to do once, by hand or by that button: grant `/dev/uinput`.
+Nothing about being a manager makes it able to write `/etc/udev/rules.d`.
+
 ## Packaging: one AppImage, and what a file cannot carry
 
 ```bash

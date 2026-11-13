@@ -207,6 +207,47 @@ def report_status() -> int:
     except Exception as exc:                                # noqa: BLE001
         print(f"profiles        : could not read ({type(exc).__name__}: {exc})")
 
+    # How the user reaches this app, and whether that route still works. A dangling
+    # `glasspad` is the interesting case: `ls` lists it, PATH finds it, and every
+    # invocation answers "No such file or directory" -- because an AppImage manager
+    # moved the file underneath a symlink we wrote. Saying "installed: yes" about that
+    # is worse than saying nothing.
+    try:
+        from glasspad import desktop_entry as de
+        link_state, link_detail = bundle.cli_link_state()
+        if link_state == "ok":
+            link_line = link_detail
+        elif link_state == "dangling":
+            old_target = link_detail.split("-> ", 1)[-1]
+            link_line = (f"BROKEN: {link_detail} -- that file is gone (a manager moved"
+                         " it?). Re-point with:  --install-desktop")
+        elif link_state == "foreign":
+            link_line = f"{link_detail} -- not written by GlassPad"
+        else:
+            link_line = "none -- --install-desktop adds it"
+        print(f"glasspad cmd    : {link_line}")
+
+        tgt = bundle.cli_target()
+        foreign = (de.foreign_entries_for(tgt[1])
+                   if tgt and tgt[0] == "appimage" else [])
+        ours_path = os.path.join(de.data_home(), "applications", de.DESKTOP_NAME)
+        ours = os.path.exists(ours_path)
+        if ours and foreign:
+            entry_line = (f"ours, plus {len(foreign)} from another launcher"
+                          f" ({foreign[0][0]}) -- two menu items for one app")
+        elif ours:
+            entry_line = f"ours ({ours_path})"
+        elif foreign:
+            entry_line = f"{len(foreign)} from another launcher: {foreign[0][0]}"
+        else:
+            entry_line = "none -- --install-desktop adds it"
+        print(f"menu entry      : {entry_line}")
+    except Exception as exc:                                # noqa: BLE001
+        link_state = "absent"
+        foreign = []
+        ours = False
+        print(f"menu entry      : could not check ({type(exc).__name__}: {exc})")
+
     # A report ends with the conclusion. Seven facts and no next step leaves the
     # reading to whoever is already worried about their touchscreen, and this is the
     # command they reach for precisely when something is wrong.
@@ -219,7 +260,10 @@ def report_status() -> int:
     hint = bundle.cli_hint()
     if not uinput_ok:
         nxt = hint + " --install     (grants /dev/uinput, then adds the menu entry)"
-    elif not desktop_installed:
+    elif link_state == "dangling":
+        nxt = hint + " --install-desktop     (the `glasspad` command points at a file" \
+                    " that no longer exists)"
+    elif not (desktop_installed or ours or foreign):
         nxt = hint + " --install     (adds the menu entry and the `glasspad` command)"
     else:
         nxt = "nothing -- GlassPad is ready. Start it from the menu, or:  " + hint
@@ -250,7 +294,10 @@ def main(argv: list[str] | None = None) -> int:
         # running compositor, and this is the command that makes a downloaded
         # AppImage behave like an installed application.
         from .desktop_entry import install_desktop
-        return install_desktop(dry="--dry-run" in rest)
+        # force is passed on, otherwise `--install-desktop --force` is a sentence the
+        # program reads but does not act on -- the same defect this flag had once
+        # already, one layer down inside install_desktop().
+        return install_desktop(dry="--dry-run" in rest, force="--force" in rest)
     if "--uninstall-desktop" in rest:
         from .desktop_entry import uninstall_desktop
         return uninstall_desktop()
@@ -270,7 +317,8 @@ def main(argv: list[str] | None = None) -> int:
     if rest and rest[0] in ("--help", "-h"):
         print((__doc__ or "").strip())
         print(f"\nusage: glasspad [--status] [--edit] [--profile NAME] "
-              f"[--install] [--install-uinput] [--install-desktop] "
+              f"[--install] [--install-uinput|--uninstall-uinput] "
+              f"[--install-desktop|--uninstall-desktop] [--selftest] "
               f"[--backend {BACKEND}]")
         print("  overlay_layer owns the remaining options; --help there lists them")
         return 0
