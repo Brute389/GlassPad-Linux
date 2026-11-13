@@ -308,6 +308,19 @@ def report_status() -> int:
     return rc
 
 def main(argv: list[str] | None = None) -> int:
+    # Before a single line is written. A manager-launched run (Steam, GameScope, a
+    # .desktop entry, `nohup … > file`) has stdout on a pipe, and Python block-buffers a
+    # pipe: without this, the startup summary and the diagnostics stay in a 4 KiB buffer
+    # until exit, and a run the user closes early leaves a log that stops mid-sentence -- in
+    # the one situation where that log is the only record that exists.
+    try:
+        from glasspad import stdio as _stdio
+    except ModuleNotFoundError:
+        # Also run as `python3 glasspad/__main__.py`, where sys.path holds only the package
+        # directory and the name `glasspad` does not resolve -- the same reason __version__
+        # below is duplicated rather than imported.
+        import stdio as _stdio        # type: ignore[no-redef]
+    _stdio.line_buffer_stdout()
     rest = take_backend(sys.argv[1:] if argv is None else list(argv))
     if "--install" in rest or "--setup" in rest:
         # First, and ahead of every session-dependent check: this is the command a
@@ -395,7 +408,10 @@ def main(argv: list[str] | None = None) -> int:
         _deps.print_notice("missing")
         return 4
     code = run_layer(rest)
-    if code:
+    from glasspad.overlay_layer import EXIT_NO_DISPLAY
+    if code and code != EXIT_NO_DISPLAY:
+        # The hint is about libgtk4-layer-shell. Appending it under a "there is no display
+        # here" notice would send the reader to install a package they already have.
         sys.stderr.write(bundle.dependency_hint())
     return code
 

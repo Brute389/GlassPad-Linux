@@ -3069,9 +3069,37 @@ def apply_input_region(win: Gtk.Window, region) -> None:
     GLib.idle_add(attempt)
 
 
+class NoDisplay(RuntimeError):
+    """There is no display to draw on.
+
+    Over ssh, from a systemd unit, or from any environment whose XDG_RUNTIME_DIR is not the
+    one holding the compositor's socket. Distinct from "no layer-shell": the library can be
+    perfectly fine here, and telling the user to install it would be confidently wrong.
+    """
+
+
+# Distinct from the generic non-zero exits so `python3 -m glasspad` knows not to append the
+# libgtk4-layer-shell hint underneath a message that is not about that library.
+EXIT_NO_DISPLAY = 5
+
+
 def screen_size() -> tuple[int, int]:
-    model = Gdk.Display.get_default().get_monitors()
-    if model.get_n_items():
+    """First monitor's geometry, or the fallback when a display exists but reports none.
+
+    `Gdk.Display.get_default()` returns None rather than raising when nothing can be opened,
+    which used to make the very next attribute access an AttributeError several frames below
+    the entry point. Two virgin-run walkthroughs produced that traceback, and a traceback is
+    not a user interface: say what is missing, to stderr, because with no display there is
+    nothing for the notice window to draw on either.
+    """
+    display = Gdk.Display.get_default()
+    if display is None:
+        wd = os.environ.get("WAYLAND_DISPLAY") or "unset"
+        xrd = os.environ.get("XDG_RUNTIME_DIR") or "unset"
+        raise NoDisplay(
+            f"no Wayland display reachable (WAYLAND_DISPLAY={wd}, XDG_RUNTIME_DIR={xrd})")
+    model = display.get_monitors()
+    if model is not None and model.get_n_items():
         g = model.get_item(0).get_geometry()
         return g.width, g.height
     return 1920, 1200
@@ -3184,7 +3212,15 @@ def main(argv: list[str] | None = None) -> int:
         path = ppath or default_layout_path()
         if pnote:
             print(f"  profile: {pnote}")
-    sw, sh = screen_size()
+    try:
+        sw, sh = screen_size()
+    except NoDisplay as exc:
+        # Last chance to fail politely: from here on everything assumes a display. The
+        # paragraphs are the ones the dependency notice uses, chosen by the same state name,
+        # so the window and the stderr copy never drift apart.
+        from glasspad import deps as _deps
+        _deps.print_notice("nodisplay", detail=str(exc))
+        return EXIT_NO_DISPLAY
     simulated = None
     if args.screen:
         try:

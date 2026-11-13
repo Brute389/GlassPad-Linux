@@ -26,6 +26,7 @@ Split out of `README.md`, verbatim — nothing here was rewritten for the move.
 * [Why the licence reader is inside the app](#why-the-licence-reader-is-inside-the-app)
 * [Why GlassPad does not install packages for you](#why-glasspad-does-not-install-packages-for-you)
 * [The grant does not end when the terminal closes](#the-grant-does-not-end-when-the-terminal-closes)
+* [A traceback is not a user interface, and a buffered log is not a record](#a-traceback-is-not-a-user-interface-and-a-buffered-log-is-not-a-record)
 
 ---
 
@@ -883,3 +884,70 @@ commands in text read on a tablet; the pending verdict promises nothing) and the
 -- five minutes, not the rest of a session. The part no headless suite can see is asserted
 live, in the selftest (`step_grant_verdict`): that the label on the real panel actually
 changes for all three states, that the toast repeats it, and that the timer stops at a verdict.
+
+## A traceback is not a user interface, and a buffered log is not a record
+
+Two defects found by running the app as someone who had never run it, both in the first
+minutes of a virgin install, both invisible on the machine that wrote them.
+
+### `Gdk.Display.get_default()` returns None; the app assumed it never would
+
+```
+File "glasspad/overlay_layer.py", in screen_size
+    model = Gdk.Display.get_default().get_monitors()
+AttributeError: 'NoneType' object has no attribute 'get_monitors'
+```
+
+That is what a first run over ssh looks like, and what it looks like from any environment
+whose `XDG_RUNTIME_DIR` is not the one holding the compositor's socket -- which is exactly how
+the foreign-account walkthrough failed twice. The library was installed, the layer-shell
+global was advertised, and the app died four frames below its entry point with a stack trace
+in a build where the user has no terminal open to read it.
+
+`screen_size()` now raises `NoDisplay` with the environment in the message, `main()` routes it
+into the same state vocabulary the dependency notices use (`deps.print_notice("nodisplay")`),
+and the exit code is its own (`EXIT_NO_DISPLAY`, 5) so `__main__` does **not** append the
+libgtk4-layer-shell install hint underneath a message that is not about that library. The
+stderr copy names the socket path GDK resolved and whether it exists, because that is the
+question that took thirty minutes to answer by hand:
+
+> A Wayland client looks for its socket at `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY`. For this
+> process that is `/run/user/4321/wayland-9`, which does not exist.
+
+The first version of that sentence substituted a default `wayland-1` and cheerfully reported
+the socket *exists* on a machine with no display at all. When a variable is missing, saying so
+beats guessing what it would have been.
+
+Two things were deliberately not done. The check is **not** at the top of `main()` -- `--help`
+and `--version` have to answer over ssh, and a test now pins that. And no notice *window* is
+attempted: with no display there is nothing to draw a window on, which is why this state goes
+to stderr while its cousins go to `notice.py`.
+
+### Redirected stdout is a pipe, and a pipe is block-buffered
+
+The overlay's startup summary -- how many surfaces came up, what screen it fitted, which
+profile resolved, whether the pad is null -- was plain `print`. In a terminal you never see
+the difference. Redirected (`nohup … > file`, a manager, a systemd unit) it goes into a 4 KiB
+buffer, and the run that is closed early, killed, or hung leaves a log that stops
+mid-sentence. For a GUI app launched by something else, that log is the only record that
+exists.
+
+So it happened for real: the overlay was up -- sixteen controls measured on screen, GPU
+dmabufs open -- and its own log never said so, which is how an hour went into wondering
+whether layer-shell had mapped anything for a foreign user.
+
+`glasspad/stdio.py:line_buffer_stdout()` is the first thing `main()` does, before any line is
+written. It never raises: stdout arrives as a terminal, a pipe, a file, `None`, a
+`BytesIO`, or a test's capture object, and block-buffered logging is better than crashing on
+the way to drawing the controls.
+
+Its test ships with a **control**: the same non-blocking read, with the helper disabled, must
+see nothing until the child exits. Without that control the test passes on every machine
+forever, because the usual reason stdout arrives is the process exiting -- precisely the event
+that does not occur when a user closes an overlay. Tests for buffering that lack a control
+prove nothing, and this repository has now been bitten by a suite that could not fail often
+enough to list it as a house rule.
+
+Tests: `tests/test_no_display.py` (9, including four headless subprocess runs) and
+`tests/test_stdio.py` (6, including the control). Both run in CI on a machine with no
+display, which is the only kind of machine that can test this.

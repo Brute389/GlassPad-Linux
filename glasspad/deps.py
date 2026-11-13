@@ -329,7 +329,8 @@ def probe_bound() -> tuple[str, str]:
 
 
 def notice_lines(state: str, pkg: str | None = None,
-                 profile: dict | None = None, looked_up: bool = True) -> list[str]:
+                 profile: dict | None = None, looked_up: bool = True,
+                 detail: str | None = None) -> list[str]:
     """The explanation, as paragraphs. One owner for window, stderr and terminal.
 
     `state` is what we found:
@@ -353,9 +354,30 @@ def notice_lines(state: str, pkg: str | None = None,
     if state == "nodisplay":
         out.append("libgtk4-layer-shell is installed, but no Wayland session can be reached "
                    "from this environment, so there is nothing to draw on.")
+        # The actual failure, named. A Wayland client resolves its socket as
+        # $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY, and when that path is not there GTK does not say
+        # so -- it tries X11, and if X11 is closed you get this instead of a reason. This is
+        # how the environment of a manager-launched or foreign-user run goes wrong, and it
+        # cost half an hour of guessing to find once.
+        xrd = os.environ.get("XDG_RUNTIME_DIR") or "unset"
+        wd = os.environ.get("WAYLAND_DISPLAY") or os.environ.get("WAYLAND_SOCKET")
+        if not wd:
+            # Do not invent a default here. The first version substituted "wayland-1" and then
+            # announced the socket "exists" on a machine with no display at all, which is
+            # worse than saying nothing: it points at a path that was never the question.
+            out.append("WAYLAND_DISPLAY is not set, so this process was never told which "
+                       "session to join. Normal over ssh or from a service unit; inside a "
+                       "desktop session it means the launcher cleared the environment.")
+        else:
+            sock = os.path.join(xrd, wd) if xrd != "unset" else wd
+            out.append("A Wayland client looks for its socket at "
+                       "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY. For this process that is "
+                       f"{sock}, which "
+                       + ("exists." if os.path.exists(sock) else "does not exist."))
         out.append("Expected over ssh and before a login. From the desktop session itself:")
-        out.append("    WAYLAND_DISPLAY=" + (os.environ.get("WAYLAND_DISPLAY") or "wayland-1")
-                   + " glasspad --status")
+        out.append("    WAYLAND_DISPLAY=" + (wd or "wayland-1") + " glasspad --status")
+        if detail:
+            out.append("What the attempt reported: " + detail)
         return out
     if state == "missing":
         out.append("GlassPad cannot draw its controls: libgtk4-layer-shell is not "

@@ -255,6 +255,7 @@ conversation that starts with "and what does `--status` say".
 
 | What you see | What it is |
 | --- | --- |
+| Nothing appears at all, and the log has a Python traceback ending in `'NoneType' object has no attribute 'get_monitors'` | There is no Wayland session reachable from where you started it — over ssh, from a service unit, or with `XDG_RUNTIME_DIR` pointing somewhere else. Current builds say this in words instead of crashing, and name the socket path they tried. From the desktop session itself: `WAYLAND_DISPLAY=wayland-1 glasspad --status` |
 | Controls draw, animate, and nothing happens in the game | No `/dev/uinput` write access. `--status` says so, and **About → Grant gamepad access** opens a terminal that stages the command and waits for Enter. When it finishes, the About box re-checks and tells you which of three things just happened — **restart GlassPad** (the node changed, no log out needed), **log out and back in** (you were added to `input`, and a running program keeps the groups it started with, so restarting cannot help), or **not granted yet** (the terminal has the reason). Run `glasspad --install-uinput`, then **log out and back in** — a process keeps the groups it started with, and no `udevadm trigger` fixes that. This is the most confusing failure this program has, because everything on screen looks correct. |
 | Overlay appears on the desktop but vanishes in a game | The game has an **exclusive fullscreen** grab, which takes the screen from the compositor, and a layer surface lives in the compositor. Run the game in borderless/windowed fullscreen. |
 | No overlay at all, and `--status` mentions `zwlr_layer_shell_v1` | Your compositor does not offer layer-shell. Stock GNOME is the usual one; KWin, Hyprland, Sway and wlroots do. |
@@ -347,7 +348,7 @@ green-looking tree.
 
 | piece | tally on this machine |
 | --- | --- |
-| stdlib suites (27 files) | **342 passed** |
+| stdlib suites (29 files) | **357 passed** |
 | pytest-style suite, via `tools/run_tests.py` | **91 passed, 0 skipped** |
 | in-app self-test (`--selftest`: hub, resize, rotation, profiles, turbo, licence reader, grant verdicts) | **107 checks** |
 
