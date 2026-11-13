@@ -3138,6 +3138,13 @@ def main(argv: list[str] | None = None) -> int:
         GLib.idle_add(ov._selftest)
     if args.edit:
         print(f"  EDIT MODE: drag any control to move it; save -> {path}")
+    # Ctrl-C used to do nothing. The KeyboardInterrupt surfaced inside the GLib loop and
+    # was swallowed, so the process stayed up -- transparent, invisible, still holding a
+    # registered "Microsoft X-Box 360 pad" that games would read with nobody left to send
+    # it input. Defer through idle_add so teardown runs on the main context, on the same
+    # path as the Quit button; see glasspad/shutdown.py.
+    from glasspad import shutdown as _shutdown
+    _shutdown.install(lambda: GLib.idle_add(ov._quit_request))
     try:
         ov.loop.run()
     except KeyboardInterrupt:
