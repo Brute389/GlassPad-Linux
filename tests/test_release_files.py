@@ -207,8 +207,42 @@ def test_ci_runs_the_suite_this_repository_claims():
           "ubuntu-" in text and "ubuntu-latest" not in text)
     check("the pin is justified in a comment",
           "-latest" in text.split("#", 1)[0] or "latest" in text.lower())
-    check("installing a dependency that may not exist is a warning, not a failure",
-          "::warning::" in text)
+    # This check used to assert the opposite: that a missing libgtk4-layer-shell package
+    # was a `::warning::` and the pipeline carried on. The first real run of the workflow
+    # disproved that policy -- Ubuntu 24.04 has no such package, the warning fired, and 12
+    # of 30 suites died on `Namespace Gtk4LayerShell not available`. check_all was right not
+    # to call those passes, which means the pipeline was red anyway, only with a green-
+    # looking dependency step and a comment claiming a narrower run. So the policy now is:
+    # the environment is provided, one owner decides how, and failing to provide it stops
+    # everything. The guard follows the lesson, not the memory.
+    # Comments stripped first. The naive version failed against the comment that EXPLAINS
+    # the removed `|| true`, which is the third time today a guard of mine scanned source
+    # text for a thing the source also describes (see the writable_now AST check). The
+    # invariant is about the commands the runner executes, so that is what gets read.
+    code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+    check("the dependency is not treated as optional", "|| true" not in code)
+    check("    (and the only remaining mention is prose, not a command)",
+          "|| true" in text and "|| true" not in code)
+    check("and the old warn-and-continue is gone from what runs",
+          "::warning::" not in code)
+    action = ".github/actions/setup-deps/action.yml"
+    check("one shared step owns the environment for both jobs",
+          os.path.isfile(os.path.join(ROOT, action)))
+    n_uses = text.count("uses: ./.github/actions/setup-deps")
+    check(f"both jobs use it ({n_uses})", n_uses == 2)
+    if os.path.isfile(os.path.join(ROOT, action)):
+        atext = read(action)
+        check("it builds from a pinned upstream release, not 'latest'",
+              "archive/v1.3.0.tar.gz" in atext or "VER=1.3.0" in atext)
+        check("and verifies the tarball before building it", "sha256sum -c" in atext)
+        check("introspection is on: the GIR namespace is what GlassPad imports",
+              "-Dintrospection=true" in atext)
+        check("the typelib import is asserted, not assumed",
+              'gi.require_version("Gtk4LayerShell", "1.0")' in atext)
+        check("and a library glasspad cannot resolve is still a failure",
+              "layer_shell_path()" in atext)
+        check("nothing there is allowed to fail quietly",
+              "continue-on-error" not in atext)
 
 
 def test_ci_is_syntactically_valid_when_a_yaml_parser_is_around():

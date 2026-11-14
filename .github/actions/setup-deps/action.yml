@@ -1,0 +1,91 @@
+name: Install the test dependencies
+description: >
+  Base tools, plus libgtk4-layer-shell from wherever this machine can actually get it.
+
+# Why this is a composite action and not two copies of the same apt block: the suite job and
+# the artefact job need the identical environment, and the first run of this workflow showed
+# what happens when they drift -- the suite step had a guard, the build step had `|| true`,
+# and the two jobs disagreed about whether the dependency was optional. One owner for that
+# decision.
+
+runs:
+  using: composite
+  steps:
+    - name: Base tools
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          python3 python3-gi gir1.2-gtk-4.0 squashfs-tools desktop-file-utils
+
+    - name: libgtk4-layer-shell (distro package, or pinned upstream source)
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Ubuntu 24.04 does not carry this library at all. The first run of this workflow
+        # said `E: Unable to locate package libgtk4-layer-shell0`, warned, and carried on --
+        # after which 12 of 30 suites died on `Namespace Gtk4LayerShell not available`. That
+        # is not a test result, and check_all is right to refuse to call it one: the suites
+        # never ran. So the dependency is built from source when the distro has no package,
+        # and failing to build it is a hard error. CI that quietly tests less than it claims
+        # is the failure mode this repository keeps hitting, and "warning: narrower run" is
+        # how that looks on the way in.
+        if apt-cache show libgtk4-layer-shell0 >/dev/null 2>&1; then
+          sudo apt-get install -y --no-install-recommends libgtk4-layer-shell0
+          echo "libgtk4-layer-shell: distribution package"
+        else
+          echo "::notice::no libgtk4-layer-shell package on this release; building 1.3.0 from pinned upstream"
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev libwayland-dev wayland-protocols \
+            gobject-introspection libgirepository1.0-dev \
+            meson ninja-build pkg-config
+          # Same release Arch ships, and the tarball hash Arch asserts, checked before meson
+          # sees the file. The upstream URL is the one in that distro's PKGBUILD, not one
+          # remembered from memory:
+          #   https://gitlab.archlinux.org/archlinux/packaging/packages/gtk4-layer-shell
+          VER=1.3.0
+          SHA=1ebb01ab14e98afd1727f68f64981c37bd23305b1f131f5667c02b94cf593192
+          curl -sSLo /tmp/gtk4ls.tar.gz \
+            "https://github.com/wmww/gtk4-layer-shell/archive/v${VER}.tar.gz"
+          echo "${SHA}  /tmp/gtk4ls.tar.gz" | sha256sum -c -
+          tar -xf /tmp/gtk4ls.tar.gz -C /tmp
+          # introspection is the option that matters: GlassPad reaches this library through
+          # the GIR namespace Gtk4LayerShell, not through the C ABI alone, so a build without
+          # the typelib would satisfy the loader and still fail every suite. Everything else
+          # is switched off -- its own tests, docs, examples, vala bindings, and its smoke
+          # tests, which need a compositor this runner does not have.
+          meson setup /tmp/gtk4-layer-shell-${VER} /tmp/gtk4ls-build \
+            --prefix=/usr --buildtype=plain \
+            -Dintrospection=true -Dtests=false -Ddocs=false \
+            -Dexamples=false -Dvapi=false -Dsmoke-tests=false
+          ninja -C /tmp/gtk4ls-build
+          # /usr rather than /usr/local: the typelib then lands in
+          # /usr/lib/x86_64-linux-gnu/girepository-1.0, which is on GI's default search path
+          # and is one of the directories glasspad's own resolver names. A correct library in
+          # a directory nothing searches is indistinguishable from a missing one.
+          sudo ninja -C /tmp/gtk4ls-build install
+          sudo ldconfig
+        fi
+
+    - name: Prove the binding GlassPad actually uses loads
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import ctypes
+        import sys
+        ctypes.CDLL("libgtk4-layer-shell.so.0")
+        print("libgtk4-layer-shell.so.0 : loads by soname")
+        import gi
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("Gtk4LayerShell", "1.0")
+        from gi.repository import Gtk4LayerShell          # noqa: F401
+        print("Gtk4LayerShell typelib   : importable")
+        sys.path.insert(0, ".")
+        from glasspad import bundle
+        lib, why = bundle.layer_shell_path()
+        print(f"glasspad's own resolver  : {lib or 'NOT FOUND'} ({why})")
+        if not lib:
+            sys.exit("the library is installed but glasspad cannot find it -- "
+                     "that is exactly the mismatch a user would hit, so it fails here")
+        PY

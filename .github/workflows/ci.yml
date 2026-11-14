@@ -22,19 +22,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            python3 python3-gi gir1.2-gtk-4.0 squashfs-tools desktop-file-utils
-          # libgtk4-layer-shell is the one dependency a distribution may simply not carry.
-          # GlassPad resolves it at runtime and says which rule matched, and the suites
-          # that need it report skips rather than failures -- so its absence here is a
-          # narrower test run, not a broken one. Said out loud because a CI that quietly
-          # tests less than it claims is the failure mode this repository keeps hitting.
-          if ! sudo apt-get install -y --no-install-recommends libgtk4-layer-shell0; then
-            echo "::warning::libgtk4-layer-shell is not packaged for this Ubuntu release; the layer suites will skip and the artefact cannot be displayed here"
-          fi
+      # One action owns the environment for both jobs. The first run of this workflow is
+      # why: this step used to warn and continue when the runner had no libgtk4-layer-shell
+      # package (Ubuntu 24.04 has none), and then 12 of 30 suites died on
+      # `Namespace Gtk4LayerShell not available` -- which is not a test result, and
+      # check_all rightly refuses to report one as a pass. See the action for what happens
+      # instead, and for why a build failure there is allowed to stop the pipeline.
+      - uses: ./.github/actions/setup-deps
 
       - name: What this runner actually has
         run: |
@@ -81,12 +75,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            python3 python3-gi gir1.2-gtk-4.0 squashfs-tools desktop-file-utils
-          sudo apt-get install -y --no-install-recommends libgtk4-layer-shell0 || true
+      # Same action as the suite job, deliberately: `|| true` here was the drift that let
+      # one job think the dependency was optional and the other think it was not.
+      - uses: ./.github/actions/setup-deps
 
       - name: Build
         # The builder runs the suite before packing and refuses to package a red tree, and

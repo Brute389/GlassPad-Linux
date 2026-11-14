@@ -144,6 +144,12 @@ def test_headless_run_reports_and_exits_without_a_traceback():
               code in (4, 5))
     check("no traceback in the output", "Traceback" not in out)
     check("    and no AttributeError either", "AttributeError" not in out)
+    if not HAVE_OL:
+        # With no libgtk4-layer-shell the app stops one step earlier and reports the missing
+        # library, which is the correct answer for that machine -- asserting the no-display
+        # wording here would fail an honest build. The one claim that survives every
+        # environment is the one checked above: it did not crash.
+        return skip("the nodisplay wording needs the library to get that far")
     check("says there is nothing to draw on", "nothing to draw on" in out)
     check("names the variable that is missing", "WAYLAND_DISPLAY is not set" in out)
     check("offers the command that would work from a session", "glasspad --status" in out)
@@ -155,12 +161,16 @@ def test_headless_run_with_a_wrong_runtime_dir_names_the_socket_it_tried():
                                               "XDG_RUNTIME_DIR": "/run/user/4321"})
     check(f"same verdict (got {code})",
           not HAVE_OL or code == _overlay_module().EXIT_NO_DISPLAY)
+    if not HAVE_OL:
+        return skip("socket-path wording needs the library")
     check("names the exact path GDK looked at", "/run/user/4321/wayland-9" in out)
     check("and says it is not there", "does not exist" in out)
 
 
 def test_the_no_display_notice_does_not_send_you_installing_a_package():
     """The library is fine here. Appending the install hint would be confidently wrong."""
+    if not HAVE_OL:
+        return skip("on a machine without the library, printing that hint is CORRECT")
     from glasspad import bundle
     marker = bundle.dependency_hint().strip().splitlines()[0]
     code, out = run_headless(["--null-pad"])
@@ -204,7 +214,7 @@ def test_the_notice_accepts_the_reason_without_breaking_the_window_caller():
     # behavioural, below: the running app's own stderr has to carry the reason.
     code, out = run_headless(["--null-pad"])
     check("the running app's stderr carried its own reason",
-          "What the attempt reported" in out)
+          not HAVE_OL or "What the attempt reported" in out)
 
 
 def test_no_display_state_is_still_one_of_the_five_the_policy_defines():
