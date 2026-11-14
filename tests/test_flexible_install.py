@@ -210,13 +210,13 @@ def test_our_dangling_link_is_repaired_not_refused():
     """
     tmp = tempfile.mkdtemp()
     try:
-        img = os.path.join(tmp, "GlassPad-1.1.0-x86_64.AppImage")
+        img = os.path.join(tmp, "GlassPad-1.1.1-x86_64.AppImage")
         open(img, "w").close()
         os.chmod(img, 0o755)
         bindir = os.path.join(tmp, ".local", "bin")
         os.makedirs(bindir)
         dest = os.path.join(bindir, "glasspad")
-        os.symlink(os.path.join(tmp, "moved-away", "GlassPad-1.1.0-x86_64.AppImage"),
+        os.symlink(os.path.join(tmp, "moved-away", "GlassPad-1.1.1-x86_64.AppImage"),
                    dest)
         buf = io.StringIO()
         with env(HOME=os.path.join(tmp), GLASSPAD_BIN_DIR=bindir,
@@ -290,7 +290,7 @@ def test_an_existing_manager_entry_is_not_duplicated():
     """Two menu items for one app, and only one of them knows where the file went."""
     home = tempfile.mkdtemp()
     try:
-        img = os.path.join(home, "Applications", "GlassPad-1.1.0-x86_64.AppImage")
+        img = os.path.join(home, "Applications", "GlassPad-1.1.1-x86_64.AppImage")
         os.makedirs(os.path.dirname(img), exist_ok=True)
         open(img, "w").close()
         os.chmod(img, 0o755)

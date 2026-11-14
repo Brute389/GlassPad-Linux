@@ -37,7 +37,7 @@ Split out of `README.md`, verbatim — nothing here was rewritten for the move.
 There are two legitimate first-run routes and the installer has to behave in both,
 because they leave different things behind.
 
-**Run it.** `./GlassPad-1.1.0-x86_64.AppImage --install` does the whole job: checks the
+**Run it.** `./GlassPad-1.1.1-x86_64.AppImage --install` does the whole job: checks the
 library, grants `/dev/uinput` (one password prompt), writes the menu entry, the icon and
 the `glasspad` command. Everything it prints is copy-pasteable, because you are in a
 terminal.
@@ -117,11 +117,11 @@ list the artefact tests refuse to ship.
 ## Packaging: one AppImage, and what a file cannot carry
 
 ```bash
-./GlassPad-1.1.0-x86_64.AppImage --status              # read this first
-./GlassPad-1.1.0-x86_64.AppImage --install-uinput      # one password, once
-./GlassPad-1.1.0-x86_64.AppImage --install-desktop     # menu entry + icon, no root
-./GlassPad-1.1.0-x86_64.AppImage                       # the overlay
-./GlassPad-1.1.0-x86_64.AppImage --uninstall-uinput    # take the rule back
+./GlassPad-1.1.1-x86_64.AppImage --status              # read this first
+./GlassPad-1.1.1-x86_64.AppImage --install-uinput      # one password, once
+./GlassPad-1.1.1-x86_64.AppImage --install-desktop     # menu entry + icon, no root
+./GlassPad-1.1.1-x86_64.AppImage                       # the overlay
+./GlassPad-1.1.1-x86_64.AppImage --uninstall-uinput    # take the rule back
 ```
 
 Every one of those works from the downloaded file alone, with no repository and no
@@ -152,7 +152,7 @@ still-writable device instead of claiming success in both directions.
 carry both:
 
 ```bash
-sha256sum -c GlassPad-1.1.0-x86_64.AppImage.sha256    # from the directory holding it
+sha256sum -c GlassPad-1.1.1-x86_64.AppImage.sha256    # from the directory holding it
 less dist/BUILD-INFO.txt
 ```
 
@@ -234,8 +234,8 @@ not do.
 ./tools/make_appimage.sh                        # AppDir, then a real .AppImage
 ./tools/make_appimage.sh --dir                  # stage and run it, no packing
 ./tools/make_appimage.sh                        # GLASSPAD_NO_BORROW=1 to refuse borrowed tools
-dist/GlassPad-1.1.0-x86_64.AppImage --appimage-extract-and-run status
-dist/GlassPad-1.1.0-x86_64.AppImage status      # mounted, via squashfuse
+dist/GlassPad-1.1.1-x86_64.AppImage --appimage-extract-and-run status
+dist/GlassPad-1.1.1-x86_64.AppImage status      # mounted, via squashfuse
 ```
 
 A type-2 AppImage is `[runtime ELF][squashfs]`, so two binaries are needed and neither is
@@ -275,7 +275,7 @@ route is a way of not being blocked, not a substitute for package management.
 Profiles work through the image, which is what makes them usable at all:
 
 ```bash
-"$HOME/Downloads/GlassPad-Linux/dist/GlassPad-1.1.0-x86_64.AppImage" \
+"$HOME/Downloads/GlassPad-Linux/dist/GlassPad-1.1.1-x86_64.AppImage" \
     --appimage-extract-and-run profile fighter && %command%
 ```
 

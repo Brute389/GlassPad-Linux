@@ -5,7 +5,11 @@ Touchscreen → virtual Xbox 360 gamepad overlay for Linux, ported from GlassPad
 game and forwards touches to a kernel `uinput` device that identifies itself as
 a wired Microsoft 360 pad, so anything that accepts a controller accepts it.
 
-**Current version: 1.1.0** (Linux port). The reasoning behind each change is in
+**Current version: 1.1.1** (Linux port) — the release that makes Ubuntu 24.04 work:
+it has no `libfuse2`, so the image cannot mount, and the menu entry now carries the
+flag that lets it run anyway (see
+[The menu icon does nothing](#the-menu-icon-does-nothing-appimages-require-fuse-to-run)).
+The reasoning behind each change is in
 `git log`, not a changelog file — the history carries the *why* alongside the diff,
 and keeping a second copy in sync is a chore that goes stale within a release.
 `glasspad --version` and the About box
@@ -107,15 +111,15 @@ game. The row is the honest claim; a report is what turns it into the row above 
 
 ### Get the file
 
-**[GlassPad-1.1.0-x86_64.AppImage](https://github.com/Brute389/GlassPad-Linux/releases/latest/download/GlassPad-1.1.0-x86_64.AppImage)** &mdash;
-[sha256 sidecar](https://github.com/Brute389/GlassPad-Linux/releases/latest/download/GlassPad-1.1.0-x86_64.AppImage.sha256),
+**[GlassPad-1.1.1-x86_64.AppImage](https://github.com/Brute389/GlassPad-Linux/releases/latest/download/GlassPad-1.1.1-x86_64.AppImage)** &mdash;
+[sha256 sidecar](https://github.com/Brute389/GlassPad-Linux/releases/latest/download/GlassPad-1.1.1-x86_64.AppImage.sha256),
 [build provenance](https://github.com/Brute389/GlassPad-Linux/releases) (which commit it came from and what built it).
 All releases: [https://github.com/Brute389/GlassPad-Linux/releases](https://github.com/Brute389/GlassPad-Linux/releases).
 
 One file, about 830 KB. Verify it if you like:
 
 ```bash
-sha256sum -c GlassPad-1.1.0-x86_64.AppImage.sha256
+sha256sum -c GlassPad-1.1.1-x86_64.AppImage.sha256
 ```
 
 ### Then three commands
@@ -125,10 +129,10 @@ by itself; the one step that needs a password is *inside* the file rather than b
 so there is nothing to download twice and no directory to keep the parts in.
 
 ```bash
-chmod +x GlassPad-1.1.0-x86_64.AppImage
-./GlassPad-1.1.0-x86_64.AppImage --install-desktop    # menu entry + icon; no root
-./GlassPad-1.1.0-x86_64.AppImage --install-uinput     # one password, once -- read what it prints
-./GlassPad-1.1.0-x86_64.AppImage                      # the overlay
+chmod +x GlassPad-1.1.1-x86_64.AppImage
+./GlassPad-1.1.1-x86_64.AppImage --install-desktop    # menu entry + icon; no root
+./GlassPad-1.1.1-x86_64.AppImage --install-uinput     # one password, once -- read what it prints
+./GlassPad-1.1.1-x86_64.AppImage                      # the overlay
 ```
 
 From a checkout (`git clone https://github.com/Brute389/GlassPad-Linux.git`), the same commands are `python3 -m glasspad --install-desktop` and so on.
@@ -152,9 +156,9 @@ a password; one needs a package manager, which is the single thing this program 
 not run on your behalf. `--install` does the two it can and names the one it cannot:
 
 ```bash
-chmod +x GlassPad-1.1.0-x86_64.AppImage
-./GlassPad-1.1.0-x86_64.AppImage --install           # three steps, one password
-./GlassPad-1.1.0-x86_64.AppImage                     # done
+chmod +x GlassPad-1.1.1-x86_64.AppImage
+./GlassPad-1.1.1-x86_64.AppImage --install           # three steps, one password
+./GlassPad-1.1.1-x86_64.AppImage                     # done
 ```
 
 The `./` is not decoration: bash does not search the current directory, so the bare
@@ -279,7 +283,7 @@ ldconfig -p | grep libfuse.so.2      # no output means the image cannot mount he
 Run it without mounting — same program, one unpack per launch instead of a mount:
 
 ```bash
-APPIMAGE_EXTRACT_AND_RUN=1 ./GlassPad-1.1.0-x86_64.AppImage
+APPIMAGE_EXTRACT_AND_RUN=1 ./GlassPad-1.1.1-x86_64.AppImage
 ```
 
 Make that permanent with `export APPIMAGE_EXTRACT_AND_RUN=1` in `~/.profile`, or install

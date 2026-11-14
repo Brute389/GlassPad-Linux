@@ -84,7 +84,7 @@ body:
     attributes:
       label: Distribution and how GlassPad was started
       description: >
-        e.g. `CachyOS, ./GlassPad-1.1.0-x86_64.AppImage from a terminal`, or
+        e.g. `CachyOS, ./GlassPad-1.1.1-x86_64.AppImage from a terminal`, or
         `Fedora 41, python3 -m glasspad from a checkout, launched by Steam as a
         non-Steam game`. A menu entry and a terminal are different environments.
     validations:

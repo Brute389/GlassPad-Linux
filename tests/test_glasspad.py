@@ -1429,7 +1429,11 @@ def test_version_strings_agree():
     import glasspad
     from glasspad import __main__ as entry
 
-    declared = "1.1.0"  # bump alongside glasspad/__init__.py and CHANGELOG.md
+    declared = "1.1.1"  # bump with glasspad/__init__.py and glasspad/__main__.py
+    # (The comment here used to name CHANGELOG.md. There is no changelog file, on
+    # purpose -- the README says so and says why: git log carries the why next to the
+    # diff, and a second copy goes stale inside one release. A pointer to a file that
+    # does not exist is worse than none: it reads as a missing step in the release.)
     assert glasspad.__version__ == declared, (
         "glasspad/__init__.py says %s but this test expects %s -- a release "
         "bump is supposed to update all three"

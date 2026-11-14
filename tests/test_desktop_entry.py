@@ -9,6 +9,7 @@ so is the case where nothing launchable exists at all.
 
 Run: python3 tests/test_desktop_entry.py   (no pytest, no display)
 """
+import glob
 import os
 import shutil
 import subprocess
@@ -199,7 +200,7 @@ def test_uninstall_removes_only_what_it_can_prove_is_its_own():
     try:
         apps = os.path.join(d, ".local", "share", "applications")
         os.makedirs(apps, exist_ok=True)
-        img = os.path.join(d, "GlassPad-1.1.0-x86_64.AppImage")
+        img = os.path.join(d, "GlassPad-1.1.1-x86_64.AppImage")
         open(img, "w").close()
         os.chmod(img, 0o755)
         modern = os.path.join(apps, de.DESKTOP_NAME)
@@ -326,7 +327,11 @@ def test_no_wayland_session_required():
 
 def test_the_module_ships_in_the_appimage():
     """Desktop install is useless from a bundle if the module is not in the bundle."""
-    appimage = os.path.join(ROOT, "dist", "GlassPad-1.1.0-x86_64.AppImage")
+    # Newest image, not a pinned name: a version bump must not require editing tests,
+    # and a test that silently skips because the filename moved is how a release ships
+    # unverified.
+    found = sorted(glob.glob(os.path.join(ROOT, "dist", "GlassPad-*.AppImage")))
+    appimage = found[-1] if found else os.path.join(ROOT, "dist", "absent.AppImage")
     if not os.path.isfile(appimage):
         check("no built AppImage on this box; nothing to inspect", True)
         return
@@ -679,16 +684,16 @@ def test_the_entry_still_launches_on_a_host_that_cannot_mount():
     real = bundle.libfuse2_present
     try:
         bundle.libfuse2_present = lambda: False
-        line, note = de._exec_line_for("/home/u/GlassPad-1.1.0-x86_64.AppImage")
+        line, note = de._exec_line_for("/home/u/GlassPad-1.1.1-x86_64.AppImage")
         check("no libfuse2 -> wrapped", line.startswith("env APPIMAGE_EXTRACT_AND_RUN=1 "))
         check("    path preserved", line.endswith(".AppImage"))
         check("    and the reason is stated", "libfuse2" in (note or ""))
         check("    and undoing it is explained", "Remove that prefix" in (note or ""))
 
         bundle.libfuse2_present = lambda: True
-        line2, note2 = de._exec_line_for("/home/u/GlassPad-1.1.0-x86_64.AppImage")
+        line2, note2 = de._exec_line_for("/home/u/GlassPad-1.1.1-x86_64.AppImage")
         check("with libfuse2 -> untouched, no unpack per launch",
-              line2 == "/home/u/GlassPad-1.1.0-x86_64.AppImage" and note2 is None)
+              line2 == "/home/u/GlassPad-1.1.1-x86_64.AppImage" and note2 is None)
 
         bundle.libfuse2_present = lambda: False
         src, _ = de._exec_line_for("/home/u/src/glasspad")

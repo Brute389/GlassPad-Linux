@@ -435,7 +435,7 @@ def test_the_licence_documents_resolve_inside_the_image():
 
 
 def test_the_sidecar_verifies_where_the_user_puts_it():
-    """`sha256sum -c GlassPad-1.1.0-x86_64.AppImage.sha256` is in the README.
+    """`sha256sum -c GlassPad-1.1.1-x86_64.AppImage.sha256` is in the README.
 
     It only works if the sidecar names the file, not the path the build happened to
     write it to. A hand-run `sha256sum dist/GlassPad... > dist/....sha256` recorded

@@ -44,7 +44,7 @@ import sys
 # directory, so a top-level `from glasspad import __version__` dies with
 # "No module named 'glasspad'". test_version_strings_agree() is what keeps
 # the two equal, so drifting is a failed test rather than a wrong --version.
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 BACKEND = "layer"
 

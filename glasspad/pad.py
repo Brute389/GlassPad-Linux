@@ -321,7 +321,7 @@ def no_uinput_hint() -> str:
 
     It used to be a module constant ending in `glasspad --install-uinput`. For
     somebody holding one downloaded AppImage there is no such command -- the file is
-    called something like GlassPad-1.1.0-x86_64.AppImage and bash does not search the
+    called something like GlassPad-1.1.1-x86_64.AppImage and bash does not search the
     current directory -- so the sentence that appears exactly when something is wrong
     was itself unfollowable, and the reader's next move was `command not found`.
     bundle.cli_hint() resolves it to the AppImage path, the installed `glasspad`, or

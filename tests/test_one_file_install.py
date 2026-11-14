@@ -113,7 +113,7 @@ def test_hint_resolves_to_the_appimage_when_that_is_what_is_running():
     """A bundle user's hint must be the file they have, quoted if it needs it."""
     tmp = tempfile.mkdtemp()
     try:
-        img = os.path.join(tmp, "GlassPad-1.1.0-x86_64.AppImage")
+        img = os.path.join(tmp, "GlassPad-1.1.1-x86_64.AppImage")
         open(img, "w").close()
         with env(APPIMAGE=img, PATH="/usr/bin:/bin"):
             got = bundle.cli_hint()
