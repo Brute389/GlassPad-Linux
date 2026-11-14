@@ -240,6 +240,32 @@ def _git(*args: str) -> str:
 
 
 
+
+def mirror_to_repo_root(image: str, version: str) -> list[str]:
+    """Copy the finished image and its sidecar to the top of the repository.
+
+    Releases is the right home for a binary and this does not change that. The copy at
+    the root exists for one reason: someone arriving here sees the file list before they
+    see the Releases tab, and "download the app" should not depend on knowing that GitHub
+    splits the two.
+
+    Which is also how you end up with two files named the same thing and one of them a
+    lie. So the mirror is written here rather than by hand, its sidecar names the file
+    with no directory component (so `sha256sum -c` works where the user put it), and
+    tests/test_appimage_artifact.py insists there is exactly one, that it is named for the
+    current version, that it matches its sidecar byte for byte, and that it RUNS and
+    reports that version. A mirror that is a previous release fails the suite, which is
+    the only difference between a convenience copy and a rumour.
+    """
+    name = os.path.basename(image)
+    dest = os.path.join(ROOT, name)
+    shutil.copy2(image, dest)
+    with open(dest + ".sha256", "w", encoding="utf-8") as fh:
+        fh.write(f"{sha256_of(dest)}  {name}\n")
+    print(f"  mirrored    {name} to the repository root (plus its sidecar)")
+    return [name, name + ".sha256"]
+
+
 def clean_scratch(paths):
     """Delete the build's intermediates. The deliverable cannot be deleted by this.
 
@@ -273,8 +299,32 @@ def clean_scratch(paths):
     return removed
 
 
+def _tree_state(mirror):
+    """(state, wording) for the `source tree:` provenance field.
+
+    The root mirror is a TRACKED file that every build rewrites, so a naive `git status`
+    reports DIRTY on every clean release -- and a warning that always fires is read as
+    noise, which destroys the only reason the line exists: catching a release built from
+    private edits. So the mirror is discounted by exact name, and anything else still
+    fails loudly with the offending paths named.
+    """
+    raw = [ln for ln in _git("status", "--porcelain").splitlines() if ln.strip()]
+
+    def name_of(line):
+        return line.split()[-1]
+
+    if not raw:
+        return "clean", "clean at build time"
+    rest = [name_of(ln) for ln in raw if name_of(ln) not in set(mirror)]
+    if not rest:
+        return "mirror", ("clean at build time, apart from the root mirror ("
+                          + ", ".join(mirror) + "), which this build refreshed")
+    return "dirty", "DIRTY -- uncommitted changes were packed: " + ", ".join(rest[:6])
+
+
 def write_build_info(out: str, *, mksq: str, mksq_src: str, runtime: str,
-                     runtime_src: str, sq_bytes: int) -> str:
+                     runtime_src: str, sq_bytes: int,
+                     mirror=None) -> str:
     """dist/BUILD-INFO.txt -- what went into this exact file, and its hash.
 
     Not a build log. The point is that a stranger can check a release: the sha256 of the
@@ -302,7 +352,7 @@ def write_build_info(out: str, *, mksq: str, mksq_src: str, runtime: str,
     ver = _probe([mksq, "-version"])
     mksq_ver = (ver.stdout.splitlines() or ["?"])[0]
     uname = os.uname()
-    dirty = bool(_git("status", "--porcelain"))
+    _state, tree_note = _tree_state(mirror or [])   # state itself is only wording
     lines = [
         "GlassPad (Linux) -- build provenance",
         "",
@@ -317,7 +367,7 @@ def write_build_info(out: str, *, mksq: str, mksq_src: str, runtime: str,
         f"source commit  : {_git('rev-parse', 'HEAD') or 'unknown'}",
         f"source describe: {_git('describe', '--tags', '--always') or 'unknown'}",
         f"tag            : {_git('describe', '--tags', '--exact-match') or '(none)'}",
-        f"source tree    : {'DIRTY -- uncommitted changes were packed' if dirty else 'clean at build time'}",
+        f"source tree    : {tree_note}",
         "",
         f"mksquashfs     : {mksq}  ({mksq_src})",
         f"mksquashfs ver : {mksq_ver}",
@@ -506,11 +556,14 @@ def main() -> int:
           f"{pad} bytes of alignment padding)")
     print(f"  image offset where the runtime starts looking: "
           f"{runtime_offset(out)}")
+    # The mirror is written BEFORE provenance, so BUILD-INFO can say honestly that the
+    # only uncommitted change in the tree is this very copy.
+    mirrored = mirror_to_repo_root(out, version)
     info = write_build_info(out, mksq=mksq, mksq_src=mksq_src, runtime=runtime,
-                            runtime_src=runtime_src, sq_bytes=os.path.getsize(sq))
+                            runtime_src=runtime_src, sq_bytes=os.path.getsize(sq),
+                            mirror=mirrored)
     print(f"  provenance: {os.path.relpath(info, ROOT)} and "
           f"{os.path.basename(out)}.sha256")
-
     # Scratch goes, deliverables stay. Kept on request for anyone who wants to look inside
     # the AppDir the image was packed from -- `--dir` exists for the same reason.
     if os.environ.get("GLASSPAD_KEEP_STAGING") == "1":

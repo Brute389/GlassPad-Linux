@@ -460,6 +460,76 @@ def test_the_sidecar_verifies_where_the_user_puts_it():
         check("    and the digest is the image's own",
               recorded[0] == hashlib.sha256(open(image, "rb").read()).hexdigest())
 
+
+
+def mirror_files():
+    """The tracked copy at the repository root, if any."""
+    return sorted(glob.glob(os.path.join(ROOT, "GlassPad-*.AppImage")))
+
+
+def test_the_root_mirror_is_the_app_and_not_a_rumour():
+    """The file at the top of the repo must be the app, now, or it must not exist.
+
+    A copy next to the README is there because a visitor sees the file list before the
+    Releases tab. It is also the second copy of a binary that this project has spent a
+    week deleting copies of -- so the checks are the ones that catch a stale twin:
+
+      * exactly one, or "which one do I download?" is back;
+      * named for the version the package reports;
+      * its own sidecar matches it byte for byte, with a bare filename so
+        `sha256sum -c` works in the directory the user put them in;
+      * it RUNS and reports that same version, which is the only test that would notice
+        a 1.1.1 file that is really last week's build.
+    """
+    mirrors = mirror_files()
+    if not mirrors:
+        print("  skip no root mirror (nothing built yet)")
+        return
+    check(f"exactly one image at the repository root ({len(mirrors)})", len(mirrors) == 1)
+    if len(mirrors) != 1:
+        return
+    m = mirrors[0]
+    name = os.path.basename(m)
+
+    sys.path.insert(0, ROOT)
+    import glasspad
+    check(f"named for the version the package reports ({name})",
+          name == f"GlassPad-{glasspad.__version__}-x86_64.AppImage")
+
+    side = m + ".sha256"
+    if not os.path.exists(side):
+        check("the sidecar sits beside it", False)
+        return
+    rec = open(side, encoding="utf-8").read().split()
+    check("sidecar names a bare filename, so `sha256sum -c` works where the user put it",
+          len(rec) == 2 and rec[1] == name)
+    check("sidecar digest matches the mirror",
+          len(rec) == 2 and rec[0] == _md5_sha(m))
+
+    env = dict(os.environ, APPIMAGE_EXTRACT_AND_RUN="1")
+    p = subprocess.run([m, "--version"], capture_output=True, text=True, timeout=180, env=env)
+    got = (p.stdout or "").strip()
+    check(f"it runs and reports its own version ({got[:40] or got!r} rc={p.returncode})",
+          p.returncode == 0 and glasspad.__version__ in got)
+
+
+def test_the_builder_is_what_writes_the_mirror():
+    """A tracked file that humans refresh by hand is how copies drift apart.
+
+    Static on purpose: the invariant is "the build does it", and a behavioural test would
+    have to run the whole packer.
+    """
+    src = open(os.path.join(ROOT, "tools", "mk_appimage_offline.py"), encoding="utf-8").read()
+    check("the offline builder mirrors the image to the repo root",
+          "def mirror_to_repo_root(" in src and "mirror_to_repo_root(out" in src)
+    check("    and refreshes the sidecar with a bare filename",
+          'f"{sha256_of(dest)}  {name}' in src)
+    check("    provenance discounts the mirror rather than crying DIRTY every build",
+          "def _tree_state(" in src)
+    gitignore = open(os.path.join(ROOT, ".gitignore"), encoding="utf-8").read()
+    check("and .gitignore makes exactly that one path an exception",
+          "!/GlassPad-*.AppImage" in gitignore)
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

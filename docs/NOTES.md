@@ -29,6 +29,7 @@ Split out of `README.md`, verbatim — nothing here was rewritten for the move.
 * [A traceback is not a user interface, and a buffered log is not a record](#a-traceback-is-not-a-user-interface-and-a-buffered-log-is-not-a-record)
 * [The Debian split CI found](#the-debian-split-ci-found)
 * [FUSE is not one question but two](#fuse-is-not-one-question-but-two)
+* [A second copy of the binary, on purpose](#a-second-copy-of-the-binary-on-purpose)
 
 ---
 
@@ -1076,3 +1077,38 @@ one distribution, run on another, answers confidently and wrongly.** `pacman -Qo
 libfuse2 (present, and irrelevant). Each was fixed by asking the question the runtime
 actually asks, and by making the fallback text report what it measured instead of what the
 author's machine happened to lack.
+
+## A second copy of the binary, on purpose
+
+The AppImage now lives at the top of the repository as well as in Releases. That is a
+deliberate exception to two rules this project has been enforcing all week: binaries do not
+belong in git, and a file that exists twice goes stale.
+
+The reason it is here anyway is reachability. Someone who lands on the repository reads the
+file list; the Releases tab is a thing you already know exists. `download the app` should
+not depend on knowing GitHub's split, and a project this size has one binary.
+
+The cost is real, so the exception is narrow and machine-enforced:
+
+* **The build writes it.** `mirror_to_repo_root()` runs at the end of
+  `tools/mk_appimage_offline.py`, alongside the sidecar. There is no "remember to copy it"
+  step, because those rot within a release.
+* **`.gitignore` exempts one path**, not a pattern that also matches scratch:
+  `!/GlassPad-*.AppImage`, with the guard named in the comment above it.
+* **The suite treats staleness as a failure**: exactly one image at the root, named for
+  `glasspad.__version__`, its sidecar matching byte for byte with a *bare* filename (so
+  `sha256sum -c` works in whatever directory the user dropped them in), and it must
+  actually run and print that version. That last one is the only check that catches a file
+  named 1.1.1 which is really last week's build.
+* **Provenance stays honest.** The mirror is tracked, so every build dirties the tree, and
+  `source tree : DIRTY` on every clean release would make the line mean nothing -- the line
+  exists to catch a release built from private edits. `_tree_state()` therefore discounts
+  the mirror *by exact name* and still names everything else. Discounting a file is not the
+  same as looking away: a build with real uncommitted edits prints them.
+
+Version numbering follows the same logic: this is still 1.1.1. The payload differs from the
+first 1.1.1 by documentation and comments, so the release was re-tagged and its assets
+replaced rather than inventing a 1.1.2 for hygiene. The digest changed, which is the part a
+reader is entitled to know, and the release notes say so instead of pretending the file was
+always this one.
+

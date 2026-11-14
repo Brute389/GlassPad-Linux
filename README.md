@@ -116,6 +116,13 @@ game. The row is the honest claim; a report is what turns it into the row above 
 [build provenance](https://github.com/Brute389/GlassPad-Linux/releases) (which commit it came from and what built it).
 All releases: [https://github.com/Brute389/GlassPad-Linux/releases](https://github.com/Brute389/GlassPad-Linux/releases).
 
+The same file also sits at the [top of the repository](GlassPad-1.1.1-x86_64.AppImage),
+with its sidecar, for anyone who would rather take it from the file list than find the
+Releases tab. It is a mirror produced by `tools/mk_appimage_offline.py` on every build —
+not a second upload to keep in sync — and the suite fails if it is stale, duplicated, or
+does not run and report the version in its own filename. The release asset stays the
+canonical copy.
+
 One file, about 830 KB. Verify it if you like:
 
 ```bash
@@ -441,7 +448,7 @@ that never started, constants that read like a spec — is in
 | `tools/make_appimage.sh` | Stage the AppDir (validated desktop entry, `AppRun`), run it, then pack if the tooling exists — and say plainly what is missing when it does not. `--clean` removes the build's scratch (AppDir, intermediate squashfs, borrowed runtime) and keeps the image, its sidecar and `BUILD-INFO.txt`. |
 | `tools/glasspad-profile` | Claim a profile for the overlay (`--seed`, `--list`, `--status`, `--clear`). Exits 0 unless the *arguments* were wrong — a launcher must never fail because of the overlay. |
 | `tools/shot_stage.py` | A plain dark window to photograph the overlay against. Its reason for existing is in its docstring: shooting the overlay over a working desktop publishes somebody's files, and the first version used `fullscreen()`, which made the overlay vanish -- KWin raises fullscreen windows above layer-shell surfaces, the same rule that swallows the overlay in an exclusive-fullscreen game. |
-| `tools/mk_appimage_offline.py` | Pack a staged AppDir into a real type-2 `.AppImage`, using the package-owned `mksquashfs` and the pinned AppImageKit runtime (borrowing only as a fallback, and announced when it happens), checking the payload offset and writing BUILD-INFO plus the sha256 sidecar. |
+| `tools/mk_appimage_offline.py` *(mirrors the image to the repo root as it packs)* | | Pack a staged AppDir into a real type-2 `.AppImage`, using the package-owned `mksquashfs` and the pinned AppImageKit runtime (borrowing only as a fallback, and announced when it happens), checking the payload offset and writing BUILD-INFO plus the sha256 sidecar. |
 
 Also here, and deliberately: the tree holds only what is needed to build, install
 and verify. The measurement tools that derived this spec — `render_style.py` and

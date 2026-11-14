@@ -5,8 +5,7 @@
 
 Or let it run the command itself, so nothing can be missed between the steps:
 
-    python3 tools/uinput_watch.py run -- env DISPLAY= QT_QPA_PLATFORM=offscreen \
-        python3 -m pytest tests -q
+    python3 tools/uinput_watch.py run -- python3 tools/run_tests.py
 
 Why this exists: a green test suite does not prove no virtual gamepad was
 created. PadService turns backend errors into a status line, so a test that

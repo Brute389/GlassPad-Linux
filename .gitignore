@@ -16,4 +16,11 @@ squashfs-root/
 *.run
 *.AppImage
 
+# ...except the one copy at the repository root. It is tracked on purpose: someone
+# browsing the file list should be able to take the app without first learning that
+# GitHub keeps binaries in a separate tab. tools/mk_appimage_offline.py refreshes it
+# on every build, and tests/test_appimage_artifact.py fails if it is stale, duplicated,
+# or does not run and report the version its own filename claims.
+!/GlassPad-*.AppImage
+
 # Unpacked bundles from the self-extracting launcher live under $XDG_CACHE_HOME
