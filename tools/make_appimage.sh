@@ -362,9 +362,23 @@ if command -v appimagetool >/dev/null 2>&1; then
   echo "    appimagetool failed" >&2; exit 1
 fi
 
+# Say which tool is actually missing. The first CI run on ubuntu-24.04 printed "neither
+# appimagetool nor squashfs-tools is installed" on a machine that had squashfs-tools
+# installed by apt, because this block was written for the one machine it first ran on.
+# A wrong diagnosis in a fallback path is worse than no diagnosis: the reader goes and
+# installs something they already have.
+have_mksq=0; command -v mksquashfs >/dev/null 2>&1 && have_mksq=1
+have_tool=0; command -v appimagetool >/dev/null 2>&1 && have_tool=1
+if [ "$have_mksq" = 1 ]; then
+  headline="  mksquashfs IS installed here; appimagetool is not, and the offline builder"
+  headline2="  did not produce a file either (see its output above)."
+else
+  headline="  Neither appimagetool nor squashfs-tools is installed, and this machine has no"
+  headline2="  network to fetch them, so the final squash+runtime step cannot run here."
+fi
 cat >&2 <<HOWTO
-  Neither appimagetool nor squashfs-tools is installed, and this machine has no network
-  to fetch them, so the final squash+runtime step cannot run here. The AppDir is complete
+$headline
+$headline2 The AppDir is complete
   and runs (above); finishing it takes one command on a machine that has the tool:
 
     Arch/CachyOS   sudo pacman -S squashfs-tools        # then: appimagetool from the AUR

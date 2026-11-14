@@ -29,6 +29,22 @@ import os
 import shutil
 import struct
 import subprocess
+
+
+def _probe(argv, **kw):
+    """Run a probe that is allowed to be missing.
+
+    This block writes provenance: which package owns the mksquashfs we borrowed, what
+    version it reports. Asking `pacman -Qo` on a Debian/Ubuntu box is a question that has
+    no answer, not a failure -- but the crash took the whole build down on the first CI
+    run on ubuntu-24.04, on a machine that had squashfs-tools installed by apt and did not
+    need pacman at all. Same lesson as uinput_setup._run_tool, one file over.
+    """
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, **kw)
+    except OSError:
+        return subprocess.CompletedProcess(argv, 127, "", f"{argv[0]} not available")
+
 import sys
 import time
 
@@ -246,10 +262,10 @@ def write_build_info(out: str, *, mksq: str, mksq_src: str, runtime: str,
     except OSError:
         pass
     pkg = ""
-    own = subprocess.run(["pacman", "-Qo", mksq], capture_output=True, text=True)
+    own = _probe(["pacman", "-Qo", mksq])
     if own.returncode == 0:
         pkg = own.stdout.strip()
-    ver = subprocess.run([mksq, "-version"], capture_output=True, text=True)
+    ver = _probe([mksq, "-version"])
     mksq_ver = (ver.stdout.splitlines() or ["?"])[0]
     uname = os.uname()
     dirty = bool(_git("status", "--porcelain"))
