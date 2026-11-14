@@ -234,9 +234,19 @@ not do.
 ./tools/make_appimage.sh                        # AppDir, then a real .AppImage
 ./tools/make_appimage.sh --dir                  # stage and run it, no packing
 ./tools/make_appimage.sh                        # GLASSPAD_NO_BORROW=1 to refuse borrowed tools
+./tools/make_appimage.sh --clean                # drop the scratch; keeps image, sidecar, BUILD-INFO
 dist/GlassPad-1.1.1-x86_64.AppImage --appimage-extract-and-run status
 dist/GlassPad-1.1.1-x86_64.AppImage status      # mounted, via squashfuse
 ```
+
+`dist/` is meant to answer "which part of this is necessary?" with one answer: the image,
+its `.sha256` sidecar, its `BUILD-INFO.txt`. The other things a build makes -- the AppDir,
+the intermediate `payload.sqsh`, the borrowed `runtime-active` -- are scratch. They used to
+be left behind by the offline route, because only the `appimagetool` path called
+`cleanup_staging`, and an audit of the folder found ~1.9 MB of them sitting next to the
+deliverable. Both routes clean now; `--clean` exists because `--dir` leaves the AppDir on
+purpose (it is the thing you carry to a machine that has `appimagetool`), and `GLASSPAD_KEEP_STAGING=1`
+reverses the default when you want to look inside what got packed.
 
 A type-2 AppImage is `[runtime ELF][squashfs]`, so two binaries are needed and neither is
 written here. Both are now **named, versioned and hash-checked**:

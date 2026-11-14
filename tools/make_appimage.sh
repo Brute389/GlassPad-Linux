@@ -4,6 +4,7 @@
 #   tools/make_appimage.sh              # stage dist/GlassPad.AppDir (+ pack if able)
 #   tools/make_appimage.sh --dir        # stage only; run dist/GlassPad.AppDir/AppRun
 #   tools/make_appimage.sh --skip-tests # don't run the suite first
+#   tools/make_appimage.sh --clean      # drop staging scratch; keeps the artefacts
 #
 # WHAT AN APPIMAGE BUYS HERE, AND WHAT IT DOES NOT
 #
@@ -37,6 +38,19 @@ for a in "$@"; do
   case "$a" in
     --dir) do_pack=0 ;;
     --skip-tests) run_tests=0 ;;
+    --clean)
+      # The same list cleanup_staging removes, offered on its own. --dir and the offline
+      # builder both leave staging in place deliberately (the AppDir is what you carry to
+      # a machine that has appimagetool), so "what is safe to delete in dist/" needs a
+      # one-word answer instead of a reading of this script. Never matches an artefact;
+      # tests/test_release_files.py fails if an rm line here ever does.
+      rm -rf "$root/dist/GlassPad.AppDir" "$root/dist/payload.sqsh" \
+             "$root/dist/runtime-active" "$root/dist/runtime-borrowed"
+      echo "cleaned staging scratch; the image, its sidecar and BUILD-INFO.txt are untouched"
+      for keep in "$root"/dist/GlassPad-*.AppImage; do
+        [ -e "$keep" ] && echo "  kept: ${keep##*/}"
+      done
+      exit 0 ;;
     -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown option: $a" >&2; exit 2 ;;
   esac

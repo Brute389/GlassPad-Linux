@@ -15,6 +15,7 @@ The templates are also checked against the real command line: a template that te
 to paste the output of a flag that no longer exists produces a report about a command that
 failed, which is worse than no template.
 """
+import tempfile
 import os
 import re
 import subprocess
@@ -523,6 +524,87 @@ def test_pictures_are_described_not_decorated():
     check("and each says what is in the frame, rather than `screenshot`",
           all(len(a.split()) >= 3 for a in alts))
 
+
+
+
+def test_cleaning_staging_never_eats_a_deliverable():
+    """`--clean` in a throwaway tree: scratch gone, everything shipped still there.
+
+    Run against a copied script in a temp root rather than the real dist/ -- the
+    interesting assertion is "the published image survived", and the only safe way to
+    test that is with a fake artefact that does not matter if the code is wrong.
+    """
+    import shutil
+    import subprocess
+    tmp = tempfile.mkdtemp(prefix="gp-clean-")
+    try:
+        os.makedirs(os.path.join(tmp, "tools"))
+        dist = os.path.join(tmp, "dist")
+        os.makedirs(os.path.join(dist, "GlassPad.AppDir", "usr", "lib"))
+        shutil.copy2(os.path.join(ROOT, "tools", "make_appimage.sh"),
+                     os.path.join(tmp, "tools", "make_appimage.sh"))
+        ship = ["GlassPad-9.9.9-x86_64.AppImage", "GlassPad-9.9.9-x86_64.AppImage.sha256",
+                "BUILD-INFO.txt"]
+        scratch = ["payload.sqsh", "runtime-active", "runtime-borrowed", "GlassPad.AppDir"]
+        for name in ship + scratch:
+            path = os.path.join(dist, name)
+            if os.path.isdir(path):
+                continue
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("fixture\n")
+        with open(os.path.join(dist, "GlassPad.AppDir", "usr", "lib", "libstolen.so"),
+                  "w", encoding="utf-8") as fh:
+            fh.write("fixture\n")
+
+        r = subprocess.run(["bash", os.path.join(tmp, "tools", "make_appimage.sh"),
+                            "--clean"], capture_output=True, text=True, timeout=120)
+        check(f"--clean exits 0 (rc={r.returncode}: {r.stderr.strip()[:60]})", r.returncode == 0)
+        left = sorted(os.listdir(dist))
+        for name in ship:
+            check(f"    kept {name}", name in left)
+        for name in scratch:
+            check(f"    removed {name}", name not in left)
+        check("it says what it kept, so the user is not guessing",
+              "GlassPad-9.9.9-x86_64.AppImage" in r.stdout)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_no_build_route_is_allowed_to_delete_an_artefact():
+    """Static guard behind the behavioural one: no `rm` line may name a deliverable.
+
+    Scanned, not read. The cleanup in make_appimage.sh is a list of paths and the list is
+    the safety property; the day someone adds "dist/*" because it is shorter, the build
+    script eats the release. Comments are stripped first -- this suite has tripped on
+    prose three times, and each time the prose was explaining the rule, not breaking it.
+    """
+    import ast
+    ship = (".AppImage", ".sha256", "BUILD-INFO")
+    bad = []
+    sh = read("tools", "make_appimage.sh")
+    for i, line in enumerate(sh.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("#") or not stripped:
+            continue
+        if re.search(r"\brm\b", stripped) and any(t in stripped for t in ship):
+            bad.append(f"make_appimage.sh:{i}: {stripped[:70]}")
+
+    py = read("tools", "mk_appimage_offline.py")
+    tree = ast.parse(py)
+    fn = next((n for n in tree.body
+               if isinstance(n, ast.FunctionDef) and n.name == "clean_scratch"), None)
+    check("the offline builder has a clean_scratch() at all", fn is not None)
+    if fn is not None:
+        body_src = ast.get_source_segment(py, fn)
+        for token in (".AppImage", ".sha256", "BUILD-INFO.txt"):
+            check(f"    clean_scratch() refuses {token}", token in body_src)
+        # and it must be *called*, or the guard is a museum piece
+        called = any(isinstance(n, ast.Call) and getattr(n.func, "id", "") == "clean_scratch"
+                     for n in ast.walk(tree))
+        check("    clean_scratch() is actually called", called)
+        check("    GLASSPAD_KEEP_STAGING can override the cleanup",
+              "GLASSPAD_KEEP_STAGING" in py)
+    check(f"no rm line in the builders names a deliverable ({bad[:2]})", not bad)
 
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

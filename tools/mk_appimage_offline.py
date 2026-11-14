@@ -239,6 +239,40 @@ def _git(*args: str) -> str:
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+
+def clean_scratch(paths):
+    """Delete the build's intermediates. The deliverable cannot be deleted by this.
+
+    dist/ is meant to answer "which part of this is necessary?" with one answer: the
+    image, its sha256 sidecar, its BUILD-INFO. Everything else is scratch the packer
+    made on the way here.
+
+    Only the appimagetool path in make_appimage.sh used to clean, so the offline route --
+    the one that actually produces the shipped file on a machine without appimagetool --
+    left about 1.9 MB behind: the AppDir, the borrowed runtime, the intermediate
+    squashfs. Auditing the folder for junk found it, and the honest description of that
+    state was that the tidy tree was the accident and the cluttered one the default.
+
+    The refuse-list is checked rather than trusted. Deleting the artefact from a build
+    script is the kind of bug that only bites after the file has been published, and the
+    sidecar would then be pointing at nothing.
+    """
+    removed = []
+    for path in paths:
+        base = os.path.basename(path)
+        if base.endswith(".AppImage") or base.endswith(".sha256") or base == "BUILD-INFO.txt":
+            print(f"  refusing to remove {base}: that is the deliverable, not scratch")
+            continue
+        if os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+        elif os.path.exists(path):
+            os.unlink(path)
+        else:
+            continue
+        removed.append(base)
+    return removed
+
+
 def write_build_info(out: str, *, mksq: str, mksq_src: str, runtime: str,
                      runtime_src: str, sq_bytes: int) -> str:
     """dist/BUILD-INFO.txt -- what went into this exact file, and its hash.
@@ -476,6 +510,20 @@ def main() -> int:
                             runtime_src=runtime_src, sq_bytes=os.path.getsize(sq))
     print(f"  provenance: {os.path.relpath(info, ROOT)} and "
           f"{os.path.basename(out)}.sha256")
+
+    # Scratch goes, deliverables stay. Kept on request for anyone who wants to look inside
+    # the AppDir the image was packed from -- `--dir` exists for the same reason.
+    if os.environ.get("GLASSPAD_KEEP_STAGING") == "1":
+        print("  staging kept  (GLASSPAD_KEEP_STAGING=1)")
+    else:
+        gone = clean_scratch([
+            sq, runtime,
+            os.path.join(ROOT, "dist", "runtime-borrowed"),
+            os.path.join(ROOT, "dist", "GlassPad.AppDir"),
+        ])
+        if gone:
+            print("  staging cleaned: " + ", ".join(gone) +
+                  "   (GLASSPAD_KEEP_STAGING=1 keeps them)")
     return 0
 
 
