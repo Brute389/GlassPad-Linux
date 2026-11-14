@@ -896,7 +896,6 @@ class TestDocPointers:
     SHIPPED = (sorted((ROOT / "glasspad").glob("*.py"))
                + sorted((ROOT / "tools").glob("*.py"))
                + [ROOT / "packaging" / "glasspad-udev.rules",
-                  ROOT / "desktop" / "glasspad.desktop.in",
                   ROOT / "tools" / "glasspad-profile"])
     # A bare filename resolves relative to the package or the repo root, which
     # is where the license texts and the udev rule actually live, and tools/
@@ -905,7 +904,7 @@ class TestDocPointers:
     # what test_orphan_constants.py caught"), and a pointer to the check that will
     # fire is the most useful kind of pointer there is. It should resolve, not be
     # exempted.
-    LOOKUP = (ROOT / "glasspad", ROOT / "desktop", ROOT / "licenses",
+    LOOKUP = (ROOT / "glasspad", ROOT / "licenses",
               ROOT / "tests", ROOT / "tools", ROOT / "packaging", ROOT / "docs", ROOT)
     # Written at runtime in the user's own directories, never shipped and never expected
     # in this tree: layout.json in ~/.config/GlassPad, and the menu entries that live in

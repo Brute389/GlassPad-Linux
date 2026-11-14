@@ -138,8 +138,7 @@ def icon_source() -> str | None:
     There was a time when this preferred `packaging/glasspad.svg`, a picture of a tablet
     with a gamepad on it that I drew because the tree had no icon in the place a build
     looks. It does have one -- `glasspad/img/glasspad_icon_*.png`, the upstream artwork,
-    which is what `Icon=glasspad` in desktop/glasspad.desktop.in has always meant to
-    resolve to. A placeholder that stays after the real thing arrives is worse than no
+    which is what `Icon=glasspad` in the generated entry has always meant to resolve to. A placeholder that stays after the real thing arrives is worse than no
     placeholder, because it looks like a deliberate choice.
 
     Resolution order puts the source tree first (a checkout is what gets built from),
@@ -258,7 +257,17 @@ def install_icons(base: str, src: str) -> tuple[list[str], list[str]]:
 
 def desktop_text(exec_line: str, workdir: str | None = None,
                  status_line: str | None = None) -> str:
-    """The .desktop body. Field order mirrors desktop/glasspad.desktop.in.
+    """The .desktop body, keys in the order the spec groups them.
+
+    This docstring used to read "field order mirrors desktop/glasspad.desktop.in". That
+    file is gone, and the reason it went is the point: it was a template from the first
+    packaging attempt that nothing ever built from -- the entry is generated here, and for
+    the bundle in tools/make_appimage.sh -- while three comments and two docstrings cited
+    it as the specification. Unobserved, it drifted: `Path=` unconditionally (wrong for a
+    bundle, where it would name a directory inside the FUSE mount), and no
+    `X-GlassPad-Installer`, the key the installer uses to prove an entry is ours rather
+    than a manager's. A file held up as the spec and free to disagree with the code is
+    worse than no spec, because it stops anyone from checking the code against reality.
 
     `Path=` is emitted only for a checkout. For a bundle it would name a
     directory inside the FUSE mount, which stops existing when the app exits --

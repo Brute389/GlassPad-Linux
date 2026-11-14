@@ -140,8 +140,8 @@ for priv in packaging/glasspad-udev.rules; do
     cp "$priv" "$appdir/usr/share/glasspad/$priv"
 done
 # The icon is the application's own artwork, not a stand-in drawn for the build. The
-# tree ships glasspad/img/glasspad_icon_512.png (upstream), and Icon=glasspad in
-# desktop/glasspad.desktop.in has always been a reference to exactly that.
+# tree ships glasspad/img/glasspad_icon_512.png (upstream), and Icon=glasspad in the
+# generated entry names exactly that artwork -- always has.
 #
 # It goes to two places: the theme directory Shelly or any launcher will copy out when it
 # integrates the entry, and the AppDir ROOT, where a .desktop's Icon= name is resolved

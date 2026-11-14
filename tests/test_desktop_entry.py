@@ -235,7 +235,7 @@ def test_uninstall_removes_only_what_it_can_prove_is_its_own():
 def test_the_icon_is_the_apps_own_artwork_not_the_builds():
     """`Icon=glasspad` means the application's icon.
 
-    desktop/glasspad.desktop.in says Icon=glasspad, and the artwork that name denotes is
+    The entry desktop_text() writes says Icon=glasspad, and the artwork that name denotes is
     glasspad/img/glasspad_icon_512.png -- upstream, RGBA, the thing the Windows client
     ships. The build used to substitute a tablet-with-gamepad svg drawn for the build,
     which is fine as a stand-in and wrong as a permanent resident: an app whose menu icon
