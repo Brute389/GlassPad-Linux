@@ -88,9 +88,6 @@ def md5(path):
         return hashlib.md5(fh.read()).hexdigest()
 
 
-import hashlib
-
-
 def _md5_sha(path: str) -> str:
     """The hash the sidecar publishes: sha256, not the md5 used for icon identity."""
     h = hashlib.sha256()
@@ -434,6 +431,34 @@ def test_the_licence_documents_resolve_inside_the_image():
         check("the packed resolver is the one being tested", where.startswith(root))
         licence_checks(mod, "AppImage", check)
 
+
+
+
+def test_the_sidecar_verifies_where_the_user_puts_it():
+    """`sha256sum -c GlassPad-1.1.0-x86_64.AppImage.sha256` is in the README.
+
+    It only works if the sidecar names the file, not the path the build happened to
+    write it to. A hand-run `sha256sum dist/GlassPad... > dist/....sha256` recorded
+    `dist/` and made the README's first command fail for anyone who downloaded both
+    files into the same folder -- the exact shape of the autostart-filename bug,
+    reproduced by me two commits later with a different tool.
+    """
+    for image in images():
+        side = image + ".sha256"
+        if not os.path.exists(side):
+            print(f"  skip no sidecar beside {os.path.basename(image)}")
+            continue
+        recorded = open(side, encoding="utf-8").read().split()
+        if len(recorded) < 2:
+            check(f"{os.path.basename(side)} has a digest and a name", False)
+            continue
+        name = recorded[1]
+        check(f"{os.path.basename(side)} names a bare filename",
+              os.path.basename(name) == name, )
+        check("    so `sha256sum -c` works next to the download",
+              name == os.path.basename(image))
+        check("    and the digest is the image's own",
+              recorded[0] == hashlib.sha256(open(image, "rb").read()).hexdigest())
 
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
