@@ -54,6 +54,7 @@ fullscreen mistake it replaced, are in that tool's docstring.
   | cairo bridge | *(inside `python-gobject`)* | `python3-cairo` **and `python3-gi-cairo`** | `python3-cairo` |
   | GTK 4 | `gtk4` | `gir1.2-gtk-4.0` | `gtk4` |
   | layer shell | `gtk4-layer-shell` | *no package in Ubuntu 24.04* — build from source | `gtk4-layer-shell` |
+| FUSE (mounts the AppImage) | `libfuse2` | **no package in Ubuntu 24.04** — see "The menu icon does nothing" below | still packaged |
 
   The *library* is `libgtk4-layer-shell.so.0` everywhere; the *package* is not, and the
   Arch column is the one verified by asking `pacman -Qo` who owns the installed `.so`. The
@@ -264,6 +265,34 @@ a grep for `ABS_HAT0X` matches whether it is `0x10` (a hat) or `0x39`
 against the kernel headers.
 
 ## Troubleshooting
+### The menu icon does nothing ("AppImages require FUSE to run")
+
+Ubuntu 24.04 removed the `libfuse2` package, and the AppImage runtime needs it in order to
+mount the file. `/dev/fuse` is still there, so the usual advice — load the `fuse` module,
+check `fusermount` — is aimed at something that is not the problem. Ask the question the
+runtime actually asks:
+
+```bash
+ldconfig -p | grep libfuse.so.2      # no output means the image cannot mount here
+```
+
+Run it without mounting — same program, one unpack per launch instead of a mount:
+
+```bash
+APPIMAGE_EXTRACT_AND_RUN=1 ./GlassPad-1.1.0-x86_64.AppImage
+```
+
+Make that permanent with `export APPIMAGE_EXTRACT_AND_RUN=1` in `~/.profile`, or install
+`libfuse2` wherever your distribution still offers it.
+
+`glasspad --install` checks this on the machine you are installing to and writes the menu
+entry with that variable already in `Exec=`, printing why as it goes — so on Ubuntu the
+icon works and the terminal says what it did. If you later install `libfuse2`, delete the
+`env APPIMAGE_EXTRACT_AND_RUN=1 ` prefix from that line.
+
+Debian 12, Fedora, openSUSE and Arch still ship the library, and none of this applies to
+them. Nothing about the overlay itself changes: this is only how the single file starts.
+
 
 Start with the two commands that were written for this. Both print a verdict, both are
 safe on a live machine, and together they cover most of what can be wrong:

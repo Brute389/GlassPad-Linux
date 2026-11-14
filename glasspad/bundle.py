@@ -259,6 +259,32 @@ def _cwd() -> str | None:
         return None
 
 
+
+def libfuse2_present() -> bool:
+    """Can this machine mount an AppImage? The type-2 runtime dlopens libfuse.so.2.
+
+    Ubuntu 24.04 removed that package (apt candidate: none) while keeping /dev/fuse, so
+    the two are not the same question and checking only the device gives a confident
+    wrong answer. Found while making CI pass there: the AppImage built fine and refused
+    to run, with its one line of complaint going to a terminal no launcher opened.
+
+    Returns True when in doubt -- a needless mount attempt is a message, while wrapping
+    a working install in extract-and-run costs an unpack on every launch.
+    """
+    try:
+        import ctypes.util
+        if ctypes.util.find_library("fuse2"):
+            return True
+    except Exception:
+        pass
+    import glob
+    for pat in ("/usr/lib*/libfuse.so.2*", "/lib*/libfuse.so.2*",
+                "/usr/lib/*/libfuse.so.2*"):
+        if glob.glob(pat):
+            return True
+    return False
+
+
 def installer_roots() -> list[str]:
     """Where to look for the privileged pair: override, package root, then cwd.
 

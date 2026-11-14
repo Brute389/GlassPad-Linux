@@ -665,6 +665,42 @@ def test_the_installed_set_on_disk_is_the_size_set_with_matching_headers():
         shutil.rmtree(d, ignore_errors=True)
 
 
+
+
+def test_the_entry_still_launches_on_a_host_that_cannot_mount():
+    """Ubuntu 24.04 has no libfuse2, so Exec= must not point bare at the image.
+
+    Both branches are asserted, because the interesting failure is the wrapper being
+    applied everywhere: paying an unpack on every launch on a machine that mounts fine
+    is a regression nobody would notice until the overlay felt slow.
+    """
+    from glasspad import bundle, desktop_entry as de
+
+    real = bundle.libfuse2_present
+    try:
+        bundle.libfuse2_present = lambda: False
+        line, note = de._exec_line_for("/home/u/GlassPad-1.1.0-x86_64.AppImage")
+        check("no libfuse2 -> wrapped", line.startswith("env APPIMAGE_EXTRACT_AND_RUN=1 "))
+        check("    path preserved", line.endswith(".AppImage"))
+        check("    and the reason is stated", "libfuse2" in (note or ""))
+        check("    and undoing it is explained", "Remove that prefix" in (note or ""))
+
+        bundle.libfuse2_present = lambda: True
+        line2, note2 = de._exec_line_for("/home/u/GlassPad-1.1.0-x86_64.AppImage")
+        check("with libfuse2 -> untouched, no unpack per launch",
+              line2 == "/home/u/GlassPad-1.1.0-x86_64.AppImage" and note2 is None)
+
+        bundle.libfuse2_present = lambda: False
+        src, _ = de._exec_line_for("/home/u/src/glasspad")
+        check("a source checkout is never wrapped", src == "/home/u/src/glasspad")
+
+        bundle.libfuse2_present = lambda: False
+        spaced, _ = de._exec_line_for("/home/u/My Games/GlassPad.AppImage")
+        check("a path with spaces is quoted inside the wrapper",
+              f'"/home/u/My Games/GlassPad.AppImage"' in spaced)
+    finally:
+        bundle.libfuse2_present = real
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

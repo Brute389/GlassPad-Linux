@@ -386,6 +386,30 @@ def foreign_entries_for(target: str) -> list[tuple[str, str]]:
     return out
 
 
+def _exec_line_for(target: str) -> tuple[str, str | None]:
+    """`Exec=` for the machine being installed to, and a line explaining the choice.
+
+    On a host without libfuse2 -- Ubuntu 24.04 and anything derived from it -- a menu
+    entry pointing straight at the AppImage launches nothing: the runtime prints
+    "AppImages require FUSE to run" to a terminal that no launcher opened, and the user
+    is left with an icon that appears to be broken. APPIMAGE_EXTRACT_AND_RUN=1 is the
+    documented route there: it unpacks to a temp dir instead of mounting, which costs a
+    moment per launch and works everywhere.
+
+    Decided at install time, on the machine in question, and said out loud in the install
+    output. A wrapper nobody asked for and cannot see is its own kind of surprise, and
+    the cost is real -- so the note says what it cost and how to undo it.
+    """
+    from glasspad import bundle        # lazy, like every other use here
+    if not target.strip().endswith(".AppImage") or bundle.libfuse2_present():
+        return target, None
+    quoted = target if " " not in target else f'"{target}"'
+    return (f"env APPIMAGE_EXTRACT_AND_RUN=1 {quoted}",
+            "wrapped with APPIMAGE_EXTRACT_AND_RUN=1: this system has no libfuse2, so "
+            "the image cannot mount. Remove that prefix from Exec= once you install it "
+            "(Ubuntu 24.04 dropped the package).")
+
+
 def _write_entry_and_icon(target: str, why: str, base: str, apps: str,
                      dest: str, icon: str | None, icon_dest: str | None) -> None:
     """The menu entry, its icon, and a cache refreshed only if one exists."""
@@ -394,12 +418,15 @@ def _write_entry_and_icon(target: str, why: str, base: str, apps: str,
     workdir = root if " -m glasspad" in target and os.path.isfile(
         os.path.join(root, "glasspad", "__main__.py")) and not os.environ.get("APPIMAGE") else None
 
+    exec_line, exec_note = _exec_line_for(target)
     os.makedirs(apps, exist_ok=True)
     with open(dest, "w", encoding="utf-8") as fh:
-        fh.write(desktop_text(target, workdir=workdir))
+        fh.write(desktop_text(exec_line, workdir=workdir))
     os.chmod(dest, 0o644)
     print(f"wrote {dest}")
-    print(f"  launching: {target}  ({why})")
+    print(f"  launching: {exec_line}  ({why})")
+    if exec_note:
+        print(f"  {exec_note}")
 
     if icon_dest:
         # Not one file at one size: purge, then render every size the theme dirs claim.

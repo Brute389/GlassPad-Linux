@@ -256,14 +256,64 @@ def test_extracted_contents_match_the_source_tree():
               pr.returncode == 0 and "GlassPad" in pr.stdout)
 
 
+def _libfuse2_present() -> bool:
+    """Can this machine mount an AppImage at all? The runtime dlopens libfuse.so.2."""
+    try:
+        import ctypes.util
+        if ctypes.util.find_library("fuse2"):
+            return True
+    except Exception:
+        pass
+    for d in ("/usr/lib", "/usr/lib64", "/lib", "/usr/lib/x86_64-linux-gnu",
+              "/usr/lib/i386-linux-gnu"):
+        try:
+            if any(n.startswith("libfuse.so.2") for n in os.listdir(d)):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _verify_extract_and_run(image: str) -> None:
+    """APPIMAGE_EXTRACT_AND_RUN=1: no FUSE, no mount, same program.
+
+    This is the escape hatch the README documents for exactly the hosts that cannot
+    mount, so it is not a courtesy path -- on Ubuntu 24.04 it is THE path.
+    """
+    env = dict(os.environ, APPIMAGE_EXTRACT_AND_RUN="1")
+    p = subprocess.run([image, "--version"], capture_output=True, text=True,
+                       timeout=180, env=env)
+    out = (p.stdout or "") + (p.stderr or "")
+    check(f"extract-and-run reports the version (rc={p.returncode})",
+          p.returncode == 0 and "GlassPad" in out)
+
+
 def test_the_image_runs_mounted():
     """The normal user path: double-click equivalent, squashfuse through /dev/fuse."""
     runs = images()
     if not runs:
         print("  skip nothing built yet")
         return
+    # Three environments, not two. Mounting needs BOTH the kernel device and libfuse2 --
+    # and the type-2 runtime dlopens `libfuse.so.2`, which Ubuntu 24.04 no longer ships at
+    # all (apt candidate: none), so CI there can never mount. Saying "skip" there would
+    # have meant the artefact was never run as a single file on the most likely distro a
+    # visitor uses; the documented fallback is a real path and gets asserted instead.
     if not os.path.exists("/dev/fuse"):
-        print("  skip no /dev/fuse here; the image still runs via --appimage-extract-and-run")
+        print("  note no /dev/fuse here -- verifying the extract-and-run route instead")
+        _verify_extract_and_run(runs[-1])
+        return
+    if not _libfuse2_present():
+        print("  note libfuse.so.2 absent (Ubuntu 24.04 dropped it) -- verifying the "
+              "extract-and-run route, and that the failure tells the user so")
+        p = subprocess.run([runs[-1], "--version"], capture_output=True, text=True,
+                           timeout=180)
+        out = (p.stdout or "") + (p.stderr or "")
+        check("the direct route fails loudly about FUSE rather than silently",
+              "FUSE" in out or "libfuse" in out, )
+        check("    (the message the user reads, first line)",
+              bool(out.strip()))
+        _verify_extract_and_run(runs[-1])
         return
     p = subprocess.run([runs[-1], "--version"], capture_output=True, text=True,
                        timeout=180)

@@ -28,6 +28,7 @@ Split out of `README.md`, verbatim — nothing here was rewritten for the move.
 * [The grant does not end when the terminal closes](#the-grant-does-not-end-when-the-terminal-closes)
 * [A traceback is not a user interface, and a buffered log is not a record](#a-traceback-is-not-a-user-interface-and-a-buffered-log-is-not-a-record)
 * [The Debian split CI found](#the-debian-split-ci-found)
+* [FUSE is not one question but two](#fuse-is-not-one-question-but-two)
 
 ---
 
@@ -1019,3 +1020,49 @@ The loop for all of it was `podman run ubuntu:24.04` with the repo bind-mounted,
 runner: about 20 seconds a pass against four minutes and a log download. When CI's logs
 stopped downloading mid-debug, the container was the only way to keep working -- which is
 worth writing down, because the instinct was to re-run CI and wait.
+
+## FUSE is not one question but two
+
+CI's build job produced an AppImage on ubuntu-24.04 and then could not run it:
+
+```
+dlopen(): error loading libfuse.so.2
+AppImages require FUSE to run.
+```
+
+The artefact test skipped the mounted case when `/dev/fuse` was missing. `/dev/fuse` was
+present; the library was not, and Ubuntu 24.04 has no candidate for `libfuse2` at all.
+Checking the device was measuring a different question from the one the runtime asks --
+the type-2 runtime `dlopen`s `libfuse.so.2` and has no fallback of its own.
+
+Two environments, two real paths, and both are now asserted instead of one asserted and
+one skipped:
+
+* **libfuse2 present** (Arch, Fedora, Debian 12): run the image mounted, for real.
+* **libfuse2 absent** (Ubuntu 24.04): the direct route must fail *loudly* -- that message
+  is the only thing a user will ever see -- and `APPIMAGE_EXTRACT_AND_RUN=1` must produce
+  a working program. The variable makes the runtime unpack to a temp dir rather than
+  mount: one extra unpack per launch, and it works everywhere.
+
+The user-visible version of this is worse than the CI failure, which is why the second fix
+is in the installer rather than the test: a `.desktop` entry with `Exec=/path/GlassPad.AppImage`
+on Ubuntu 24.04 launches something that writes one line of complaint into a terminal no
+one opened, and the icon simply reads as broken. `_exec_line_for()` decides at install
+time, on the machine being installed to, prints its reasoning, and says how to undo it.
+Both branches are tested, because the failure mode of applying the wrapper everywhere is
+invisible -- an unpack per launch on machines that mount fine, noticed months later as
+unexplained sluggishness.
+
+Reproduce the missing-library case without a VM:
+
+```bash
+podman run --rm -v "$PWD":/src:ro ubuntu:24.04
+apt-cache policy libfuse2          # Candidate: (none)
+```
+
+The shape repeats, and this was the third instance in a week of CI: **a probe written for
+one distribution, run on another, answers confidently and wrongly.** `pacman -Qo` on Debian
+(crash), `libgtk4-layer-shell0` on Ubuntu (no such package), `/dev/fuse` standing in for
+libfuse2 (present, and irrelevant). Each was fixed by asking the question the runtime
+actually asks, and by making the fallback text report what it measured instead of what the
+author's machine happened to lack.
