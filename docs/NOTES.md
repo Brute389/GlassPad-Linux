@@ -1112,3 +1112,16 @@ replaced rather than inventing a 1.1.2 for hygiene. The digest changed, which is
 reader is entitled to know, and the release notes say so instead of pretending the file was
 always this one.
 
+v1.1.0 itself is gone -- release *and* tag, on the server and in the local clone. A release page
+listing a version whose artefacts were superseded by a re-tagged one invites someone to install
+the broken build, and one line in the v1.1.1 notes carries the history better than a dangling
+entry does. The commit it pointed at is still an ancestor of `main`, so the tag can be recreated
+in one command if it is ever needed; what matters is that nothing publishes it by accident.
+
+**Which is why the local tag went too.** `git push --follow-tags` pushes the tags in the local
+clone, so a tag deleted on the server and left behind at home comes back on the next ordinary
+push -- a zombie release, resurrected by a flag that looks like hygiene. Either delete the tag
+where both copies live, or don't delete it at all. (This repo has used `--follow-tags`; from here
+on the release flow is `git push` then `git push origin <tag>`, which does exactly what you
+meant and nothing else.)
+
