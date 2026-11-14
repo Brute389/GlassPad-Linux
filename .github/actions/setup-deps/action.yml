@@ -16,7 +16,13 @@ runs:
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-          python3 python3-gi gir1.2-gtk-4.0 squashfs-tools desktop-file-utils
+          python3 python3-gi gir1.2-gtk-4.0 python3-cairo python3-gi-cairo \
+          python3-pil squashfs-tools desktop-file-utils
+          # python3-gi-cairo is not optional and not the same thing as python3-cairo:
+          # Debian/Ubuntu split PyGObject's cairo bridge out, and without it every paint
+          # path raises KeyError: 'could not find foreign type Context' while --status looks
+          # healthy. python3-pil belongs only to tests/test_press_look.py, which measures
+          # pixels; the app never imports PIL, and a suite that cannot start is not a pass.
 
     - name: libgtk4-layer-shell (distro package, or pinned upstream source)
       shell: bash

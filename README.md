@@ -51,12 +51,20 @@ fullscreen mistake it replaced, are in that tool's docstring.
   | | Arch / CachyOS | Debian / Ubuntu | Fedora |
   | --- | --- | --- | --- |
   | bindings | `python-gobject` | `python3-gi` | `python3-gobject` |
+  | cairo bridge | *(inside `python-gobject`)* | `python3-cairo` **and `python3-gi-cairo`** | `python3-cairo` |
   | GTK 4 | `gtk4` | `gir1.2-gtk-4.0` | `gtk4` |
-  | layer shell | `gtk4-layer-shell` | `libgtk4-layer-shell0` | `gtk4-layer-shell` |
+  | layer shell | `gtk4-layer-shell` | *no package in Ubuntu 24.04* — build from source | `gtk4-layer-shell` |
 
-  The *library* is `libgtk4-layer-shell.so.0` everywhere; the *package* is not, and only
-  the Arch column has been verified here (by asking `pacman -Qo` who owns the installed
-  `.so`). `--status` labels the unverified rows as unverified on screen instead of
+  The *library* is `libgtk4-layer-shell.so.0` everywhere; the *package* is not, and the
+  Arch column is the one verified by asking `pacman -Qo` who owns the installed `.so`. The
+  Ubuntu column is now verified too, in a container, and two things there were wrong in
+  ways a guess could not have found: **`libgtk4-layer-shell0` does not exist in Ubuntu
+  24.04's archive** (`E: Unable to locate package`), and the cairo row above was missing
+  entirely — Debian and Ubuntu split the PyGObject↔pycairo bridge into
+  [`python3-gi-cairo`](docs/NOTES.md#the-debian-split-ci-found), without which every
+  control fails to draw with `KeyError: 'could not find foreign type Context'` and nothing
+  on screen names a package. `--status` prints a `cairo bridge` row so that failure has a
+  name; the Fedora column is still a guess, and `--status` says so on screen rather than
   presenting three guesses as equals — see
   [the package names, and which ones are guesses](docs/NOTES.md#the-package-names-and-which-ones-are-guesses).
 

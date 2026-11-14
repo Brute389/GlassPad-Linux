@@ -81,7 +81,7 @@ def run(cmd, dry: bool) -> int:
     if dry:
         say(f"  would run: {' '.join(cmd)}")
         return 0
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = _run_tool(cmd, capture_output=True, text=True)
     if p.returncode != 0:
         say(f"  ! {' '.join(cmd)} exited {p.returncode}: "
             f"{(p.stderr or p.stdout).strip()[:160]}")
@@ -96,7 +96,7 @@ def settle(timeout: int = 10) -> None:
     # not wedge the installer.
     if not shutil.which("udevadm"):
         return
-    subprocess.run(["udevadm", "settle", f"--timeout={timeout}"],
+    _run_tool(["udevadm", "settle", f"--timeout={timeout}"],
                    capture_output=True, text=True)
 
 
@@ -108,14 +108,41 @@ def writable_by(target_user: str) -> bool:
     machine where the user still could not create a pad.
     """
     if is_root() and target_user and target_user != "root":
-        p = subprocess.run(["su", "-s", "/bin/sh", target_user, "-c",
+        p = _run_tool(["su", "-s", "/bin/sh", target_user, "-c",
                             f"test -w '{NODE}'"], capture_output=True, text=True)
         return p.returncode == 0
     return os.access(NODE, os.W_OK)
 
 
+class _Unavailable:
+    """Stand-in for a subprocess that never started."""
+
+    returncode = 127
+    stdout = ""
+
+    def __init__(self, why):
+        self.stderr = why
+
+
+def _run_tool(argv, **kw):
+    """subprocess.run that survives the program not existing.
+
+    A Live ISO, a recovery shell and a minimal container can all be missing `id`, `ls` or
+    `udevadm`, and this script runs in exactly those places -- it is the thing people reach
+    for when the machine is not set up yet. FileNotFoundError in the middle of a grant means
+    a traceback and no idea which half of the grant happened, so a missing tool is reported
+    as a result (rc 127, nothing on stdout) and the caller's own unknown/failed branch runs.
+
+    Found on ubuntu:24.04 in a container, from `id -nG`, while making CI faithful.
+    """
+    try:
+        return subprocess.run(argv, **kw)
+    except OSError as exc:
+        return _Unavailable(f"{argv[0]} not available: {type(exc).__name__}: {exc}")
+
+
 def in_group(target_user: str, group: str = "input") -> bool:
-    p = subprocess.run(["id", "-nG", target_user], capture_output=True, text=True)
+    p = _run_tool(["id", "-nG", target_user], capture_output=True, text=True)
     return group in (p.stdout or "").split()
 
 
@@ -268,7 +295,7 @@ def install(target_user: str, dry: bool = False, force_rule: bool = False) -> in
     while waited < 5.0 and not writable_by(target_user):
         time.sleep(0.25)
         waited += 0.25
-    perms = subprocess.run(["ls", "-l", NODE], capture_output=True, text=True).stdout
+    perms = _run_tool(["ls", "-l", NODE], capture_output=True, text=True).stdout
     perms = " ".join(perms.split()[:4]) if perms.strip() else "?"
     say(f"  /dev/uinput : {perms}")
     if writable_by(target_user):
@@ -331,7 +358,7 @@ def status_rows(target_user: str) -> list[tuple[str, str]]:
     """
     perms = "?"
     if os.path.exists(NODE):
-        out = subprocess.run(["ls", "-l", NODE], capture_output=True,
+        out = _run_tool(["ls", "-l", NODE], capture_output=True,
                              text=True).stdout.split()
         if len(out) >= 4:
             perms = " ".join(out[:4])
@@ -361,7 +388,7 @@ def report(target_user: str) -> int:
     if not os.path.exists(NODE):
         say("  /dev/uinput : MISSING (module not loaded)")
     else:
-        out = subprocess.run(["ls", "-l", NODE], capture_output=True,
+        out = _run_tool(["ls", "-l", NODE], capture_output=True,
                              text=True).stdout.split()
         perms = " ".join(out[:4]) if len(out) >= 4 else "?"
         say(f"  /dev/uinput : {'writable' if os.access(NODE, os.W_OK) else 'present, not writable'} ({perms})")

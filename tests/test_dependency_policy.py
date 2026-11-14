@@ -284,6 +284,41 @@ def test_notice_module_imports_without_a_display():
     check("and plans a window headless", len(parts) == 2 and int(parts[0]) >= 3)
 
 
+def test_the_cairo_bridge_is_a_state_the_app_can_report():
+    """Debian and Ubuntu split PyGObject's cairo bridge into python3-gi-cairo.
+
+    Without it every control fails to draw with `KeyError: could not find foreign type
+    Context`, raised inside PangoCairo, on a machine where every other --status row is
+    green. The suites on ubuntu:24.04 hit this before any user could, so the app now asks
+    the question out loud.
+    """
+    ok, why = deps.cairo_bridge_state(probe=lambda: (True, "fine"))
+    check("an injected healthy probe reports ok", ok and why == "fine")
+    ok, why = deps.cairo_bridge_state(
+        probe=lambda: (False, "no python3-gi-cairo"))
+    check("and a broken one says which package to install", (not ok) and "gi-cairo" in why)
+
+    def boom():
+        raise RuntimeError("typelib exploded")
+    ok, why = deps.cairo_bridge_state(probe=boom)
+    check("a probe that raises is reported, never propagated",
+          (not ok) and "RuntimeError" in why)
+
+    # The real probe, on this machine. It must not raise here either way, and it must not
+    # lie: if it says ok, a cairo.Context really does reach GObject code.
+    ok, why = deps.cairo_bridge_state()
+    check(f"the real probe answers without raising ({why[:40]}...)", isinstance(ok, bool))
+    if ok:
+        import cairo
+        import gi
+        gi.require_foreign("cairo", "Context")
+        check("    and 'ok' means require_foreign succeeds", True)
+    src = open(os.path.join(ROOT, "glasspad", "__main__.py"), encoding="utf-8").read()
+    check("--status prints the row", "cairo bridge" in src)
+    check("    via the policy function, not a private copy of the probe",
+          "cairo_bridge_state()" in src)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:
@@ -291,3 +326,5 @@ if __name__ == "__main__":
         fn()
     print(f"\n  {len(tests)} tests, {len(FAILS)} failure(s)")
     sys.exit(1 if FAILS else 0)
+
+

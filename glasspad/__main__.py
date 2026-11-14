@@ -189,6 +189,9 @@ def report_status() -> int:
     except Exception as exc:                                # noqa: BLE001
         print(f"Gdk display     : lookup raised {type(exc).__name__}: {exc}")
     print(f"Gdk display     : {display.get_name() if display else 'none'}")
+    from glasspad import deps as _deps
+    _cb_ok, _cb_why = _deps.cairo_bridge_state()
+    print(f"cairo bridge    : {'ok' if _cb_ok else 'MISSING'} -- {_cb_why}")
 
     if display is None:
         print("compositor      : not checked (no display to ask)")
@@ -519,14 +522,21 @@ def uninstall_uinput(argv: list[str] = ()) -> int:
         print("    sudo udevadm control --reload-rules && sudo udevadm trigger")
         return 2
 
+    dry = "--dry-run" in argv
     tool = next((t for t in ("pkexec", "sudo") if shutil.which(t)), None)
     if tool is None:
         print("Neither pkexec nor sudo is available. Run as root:")
         print(f"    python3 {script} --uninstall-uinput")
-        return 2
-
-    dry = "--dry-run" in argv
-    if dry:
+        if not dry:
+            return 2
+        # A rehearsal neither reads root's files nor writes them, so the missing tool is
+        # a fact to report, not a reason to refuse: the dry run is what gets pasted into a
+        # support thread, and it has to answer on a machine with no polkit -- a Debian
+        # netinstall, a container, a Live ISO.
+        print()
+        print("(--dry-run: showing the plan needs no privilege. The real run would stop")
+        print("  at that missing tool, and the line above is what root would run.)")
+    elif dry:
         print("(--dry-run: the script will report and change nothing)")
     with bundle.staged_priv(script) as (staged, _rule):
         if not staged:
@@ -715,17 +725,23 @@ def install_uinput(argv: list[str] = ()) -> int:
         print("  not ship.")
         return 2
 
+    dry = "--dry-run" in argv          # decided BEFORE the tool check, on purpose
     tool = next((t for t in ("pkexec", "sudo") if shutil.which(t)), None)
     if tool is None:
         print("Neither pkexec nor sudo is available, so nothing under /etc can be")
         print("written. Run the grant as root yourself:")
         print('    python3 ' + script + ' --uinput --target-user "$USER"')
-        return 2
-
-    print("One password is needed. Everything below belongs to root:")
-    print("    /etc/modules-load.d/uinput.conf    load the uinput module at boot")
-    print("    /etc/udev/rules.d/99-glasspad-...  hand /dev/uinput to group input")
-    print("    group `input`                      your account is added to it")
+        if not dry:
+            return 2
+        print()
+        print("(--dry-run: a plan needs no privilege. The real run would stop at that")
+        print("  missing tool; the line above is what root would execute.)")
+        print()
+    else:
+        print("One password is needed. Everything below belongs to root:")
+        print("    /etc/modules-load.d/uinput.conf    load the uinput module at boot")
+        print("    /etc/udev/rules.d/99-glasspad-...  hand /dev/uinput to group input")
+        print("    group `input`                      your account is added to it")
     # Said before the prompt, not after the change. `input` owns every evdev node, so
     # membership reads every keyboard and touchpad on the machine; the write on
     # /dev/uinput is the part GlassPad needs and the read is attached to it. A grant
@@ -745,7 +761,6 @@ def install_uinput(argv: list[str] = ()) -> int:
     # the real installer instead -- the resolver searched past the empty override
     # directory and found a checkout, which is correct behaviour and a live
     # change to /etc.
-    dry = "--dry-run" in argv
     if dry:
         print("(--dry-run: the script will report and change nothing)")
     # Recorded so the verdict afterwards can say whether THIS run is what changed

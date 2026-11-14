@@ -34,6 +34,25 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from glasspad import bundle, pad  # noqa: E402
 
+
+# --- every run in this file needs an escalation tool to EXIST ------------------
+# install_uinput() and uninstall_uinput() refuse to run when neither pkexec nor sudo is
+# installed. That is correct for a real run, and it made this suite mean different things
+# on different machines: green on a CI runner that ships sudo, red in a container that
+# does not, with the same code. A suite whose result depends on what the test machine has
+# installed is not measuring the code. So the tool is created once, here; nothing
+# executes it, because every test stubs subprocess.call/run -- its only job is to satisfy
+# the "can we escalate at all" gate. The dedicated no-tool test below replaces PATH.
+import atexit                                        # noqa: E402
+
+FAKE_TOOL_DIR = tempfile.mkdtemp(prefix="gp-fake-tool-")
+for _name in ("pkexec", "sudo"):
+    with open(os.path.join(FAKE_TOOL_DIR, _name), "w", encoding="utf-8") as _fh:
+        _fh.write("#!/bin/sh\nexit 0\n")
+    os.chmod(os.path.join(FAKE_TOOL_DIR, _name), 0o755)
+os.environ["PATH"] = FAKE_TOOL_DIR + os.pathsep + os.environ.get("PATH", "")
+atexit.register(shutil.rmtree, FAKE_TOOL_DIR, True)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PRIV = os.path.join(ROOT, "glasspad", "uinput_setup.py")
 FAILS = []
@@ -636,6 +655,44 @@ def _install_with_stubbed_privileges(group_before, node_writable):
         sp.call, pad.uinput_available, m._input_group_in_database = (
             real_call, real_avail, real_grp)
     return rc, buf.getvalue(), seen
+
+
+def test_a_rehearsal_answers_on_a_machine_with_no_escalation_tool():
+    """--dry-run has to work where polkit and sudo are both absent.
+
+    A Debian netinstall, a container, a Live ISO -- and the dry run is precisely what a
+    support thread asks for, so a rehearsal that refuses there leaves the user with no
+    output to send and no idea what the command would do. It elevates nothing either way,
+    so the missing tool is information, not an obstacle.
+    """
+    import glasspad.__main__ as m
+    # PATH is left intact and `which` is answered for the two escalation names only.
+    # The first attempt emptied PATH, which also hid `id` from the staged script and made
+    # the test fail for a reason it was not testing -- and, on the way, found a real bug:
+    # uinput_setup crashed with FileNotFoundError instead of reporting the missing tool.
+    import shutil as _shutil
+    real_which, seen_names = _shutil.which, []
+    old_path = os.environ["PATH"]
+    buf = io.StringIO()
+    try:
+        def which(name, *a, **k):
+            seen_names.append(name)
+            return None if str(name) in ("pkexec", "sudo") else real_which(name, *a, **k)
+        _shutil.which = which
+        check("    (and this really does hide both)",
+              not shutil.which("pkexec") and not shutil.which("sudo"))
+        with contextlib.redirect_stdout(buf):
+            rc = m.install_uinput(["--dry-run"])
+    finally:
+        _shutil.which = real_which
+        os.environ["PATH"] = old_path
+    out = buf.getvalue()
+    check("    (and the code really did look for an escalation tool)",
+          "pkexec" in seen_names)
+    check(f"the rehearsal still exits 0 (rc={rc})", rc == 0)
+    check("it says showing a plan needs no privilege", "needs no privilege" in out)
+    check("and prints what root would have run", "--uinput" in out and "python3" in out)
+    check("without pretending a password was involved", "One password" not in out)
 
 
 def test_verdict_does_not_blame_a_group_it_did_not_change():

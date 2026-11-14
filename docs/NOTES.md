@@ -27,6 +27,7 @@ Split out of `README.md`, verbatim — nothing here was rewritten for the move.
 * [Why GlassPad does not install packages for you](#why-glasspad-does-not-install-packages-for-you)
 * [The grant does not end when the terminal closes](#the-grant-does-not-end-when-the-terminal-closes)
 * [A traceback is not a user interface, and a buffered log is not a record](#a-traceback-is-not-a-user-interface-and-a-buffered-log-is-not-a-record)
+* [The Debian split CI found](#the-debian-split-ci-found)
 
 ---
 
@@ -951,3 +952,70 @@ enough to list it as a house rule.
 Tests: `tests/test_no_display.py` (9, including four headless subprocess runs) and
 `tests/test_stdio.py` (6, including the control). Both run in CI on a machine with no
 display, which is the only kind of machine that can test this.
+
+## The Debian split CI found
+
+The first push of this repository ran CI on `ubuntu-24.04`, and two things that had been
+written from Arch-shaped assumptions fell over within a minute of each other.
+
+**`libgtk4-layer-shell0` does not exist.** The workflow tried to install that package name,
+got `E: Unable to locate package`, warned, and continued -- after which 12 of 30 suites died
+on `Namespace Gtk4LayerShell not available`. The warning was the repository's own policy at
+the time ("a narrower run is still a run"), sitting in the same codebase as `check_all`'s
+rule that *a suite that cannot start is not a passing suite*. Both were written deliberately
+and they cannot both be true. The pipeline was red either way, so the warning only bought a
+green dependency step and a comment making a claim the run disproved.
+
+CI now provides the dependency: distro package if there is one, otherwise the same 1.3.0
+release Arch ships, fetched from the URL in Arch's PKGBUILD and checked against the hash Arch
+checks, with a build failure allowed to stop everything. Version and checksum came from
+`gitlab.archlinux.org/archlinux/packaging/packages/gtk4-layer-shell` and were compared
+against the tarball after download, not recalled:
+
+```
+sha256  1ebb01ab14e98afd1727f68f64981c37bd23305b1f131f5667c02b94cf593192
+```
+
+Two details in that build are load-bearing. `-Dintrospection=true`, because GlassPad reaches
+the library through the GIR namespace `Gtk4LayerShell` and a build that satisfies the dynamic
+loader with no typelib would pass a "does the .so load" check while failing every suite. And
+`--prefix=/usr`, because the typelib then lands on GI's default search path and in one of the
+directories `bundle.LAYER_SHELL_DIRS` names; `/usr/local` would have been tidier and
+invisible. The dependency step finishes by asking **glasspad's own resolver** whether it can
+find the result, because a library installed where the app does not look is indistinguishable
+from one that is missing -- and that is the user's problem, not a CI curiosity.
+
+**`python3-gi-cairo` is a separate package.** With `python3-gi`, `python3-cairo` and
+`gir1.2-gtk-4.0` all installed, the paint tests failed with:
+
+```
+KeyError: 'could not find foreign type Context'
+```
+
+raised inside `PangoCairo.create_layout`, naming no package, on a machine whose `--status`
+output looked entirely healthy. Arch folds PyGObject's cairo bridge into `python-gobject`.
+Debian and Ubuntu ship it separately, and every control in this overlay is drawn by handing a
+`cairo.Context` to PangoCairo, so on those distros the missing package is a missing
+application, not a missing nicety.
+
+Minimal reproduction, worth knowing because the error text points nowhere near the cause:
+
+```python
+import gi, cairo
+gi.require_foreign("cairo", "Context")   # ImportError: Couldn't find foreign struct converter
+```
+
+So: the package is in the CI dependency list, the README's requirements table gained a cairo
+row it did not have, and `--status` prints a `cairo bridge` row. The last of those is the
+point -- a failure mode discovered by a test suite should end up as a line the user can run,
+not just a green checkmark in a workflow.
+
+Both fixes went into one composite action (`.github/actions/setup-deps`) used by both jobs.
+The drift that caused half of this was two copies of the same apt block: the suite job had a
+guard, the build job had `|| true`, and the two jobs disagreed about whether the dependency
+was optional.
+
+The loop for all of it was `podman run ubuntu:24.04` with the repo bind-mounted, not the
+runner: about 20 seconds a pass against four minutes and a log download. When CI's logs
+stopped downloading mid-debug, the container was the only way to keep working -- which is
+worth writing down, because the instinct was to re-run CI and wait.

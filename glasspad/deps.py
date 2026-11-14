@@ -275,6 +275,51 @@ def staged_run(command: list[str]) -> list[str]:
     return ["/bin/sh", "-c", script, shown] + list(command)
 
 
+def _probe_cairo_bridge() -> tuple[bool, str]:
+    try:
+        import gi                                  # noqa: F401
+        import cairo                               # noqa: F401  (pycairo)
+    except Exception as exc:                       # noqa: BLE001
+        return False, f"pycairo is not importable ({type(exc).__name__}: {exc})"
+    try:
+        import gi
+        gi.require_foreign("cairo", "Context")
+    except Exception as exc:                       # noqa: BLE001
+        return False, ("PyGObject cannot hand a cairo.Context to GObject code. Arch ships "
+                       "this inside python-gobject; Debian and Ubuntu split it into a "
+                       f"separate package, python3-gi-cairo ({type(exc).__name__}: {exc})")
+    try:
+        import gi
+        gi.require_version("PangoCairo", "1.0")
+        from gi.repository import PangoCairo       # noqa: F401
+    except Exception as exc:                       # noqa: BLE001
+        return False, f"PangoCairo is not usable ({type(exc).__name__}: {exc})"
+    return True, "cairo.Context is a known foreign type, PangoCairo imports"
+
+
+def cairo_bridge_state(probe=_probe_cairo_bridge) -> tuple[bool, str]:
+    """Can PyGObject pass a cairo.Context into GObject code?
+
+    Every control in this overlay is drawn by handing a cairo.Context to PangoCairo and to
+    GTK's draw snapshot, so this is not a nicety -- it is on the path of every frame.
+
+    Arch folds the bridge into `python-gobject`. Debian and Ubuntu ship it as a separate
+    package, **python3-gi-cairo**, and a machine with `python3-gi`, `python3-cairo` and
+    `gir1.2-gtk-4.0` all installed still fails every paint with:
+
+        KeyError: 'could not find foreign type Context'
+
+    ...raised inside PangoCairo, naming no package, on a system where `--status` looked
+    entirely healthy. Measured on ubuntu:24.04 while getting CI green: the suites hit this
+    before any user could, which is the argument for CI having the same package set a user
+    would. `--status` now prints this row so the failure has a name and a package in it.
+    """
+    try:
+        return probe()
+    except Exception as exc:                       # noqa: BLE001 - a diagnostic that raises is worse
+        return False, f"probe raised {type(exc).__name__}: {exc}"
+
+
 def probe_bound() -> tuple[str, str]:
     """Ask the compositor, here and now, whether layer-shell actually works.
 
