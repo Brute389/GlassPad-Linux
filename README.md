@@ -1,7 +1,7 @@
 # GlassPad (Linux)
 
-Touchscreen → virtual Xbox 360 gamepad overlay for Linux, ported from GlassPad
-1.0.2 (Windows/WPF + HIDMaestro). The overlay draws touch controls on top of a
+Touchscreen → virtual Xbox 360 gamepad overlay for Linux, ported from
+[GlassPad 1.0.2](https://github.com/dansunmi/GlassPad) by Dansunmi (Windows/WPF + HIDMaestro). The overlay draws touch controls on top of a
 game and forwards touches to a kernel `uinput` device that identifies itself as
 a wired Microsoft 360 pad, so anything that accepts a controller accepts it.
 
@@ -720,7 +720,8 @@ us them.
 MIT — see `LICENSE` at the repository root. It carries the upstream copyright because this
 is a derivative work: the layout geometry, colours and animations are transcribed from
 `MainWindow.xaml` of GlassPad 1.0.2 for Windows by Dansunmi, and the thumbstick response
-from `Input/StickZone.cs` of the same project.
+from `Input/StickZone.cs` of the same project —
+[dansunmi/GlassPad](https://github.com/dansunmi/GlassPad).
 
 `licenses/THIRD-PARTY-NOTICES.txt` covers what the port stands on and keeps three things
 apart that a casual notice blurs: what is **loaded from your system rather than
